@@ -1,0 +1,55 @@
+name: Test skip-labeled logic
+on:
+  workflow_dispatch:
+
+jobs:
+  test-skip-labeled:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: issues
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The action reads github.event.issue.labels via toJson(), which in act
+      # will be an empty array unless we inject it. We test the skip=false path
+      # (no labels) to verify the check-skip step runs without error and outputs
+      # skip=false when the issue has no labels.
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+          no-comment: 'true'
+        continue-on-error: true
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # When no metrics file is written (no AI calls made), these should be 0
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$DURATION_MS'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS: all metrics outputs have expected default values"

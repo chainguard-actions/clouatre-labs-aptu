@@ -1,15 +1,155 @@
-# clouatre-labs/aptu
+# Aptu
 
-GitHub automation: AI issue triage, AI PR review, PR labeling, security scanning, and PR queue ranking
+[![crates.io](https://img.shields.io/crates/v/aptu-cli.svg?style=flat-square&color=fc8d62&logo=rust)](https://crates.io/crates/aptu-cli) [![docs.rs](https://img.shields.io/badge/docs.rs-aptu--core-66c2a5?style=flat-square&labelColor=555555&logo=docs.rs)](https://docs.rs/aptu-core) [![REUSE](https://img.shields.io/reuse/compliance/github.com/clouatre-labs/aptu?style=flat-square)](https://api.reuse.software/info/github.com/clouatre-labs/aptu) [![SLSA Level 3](https://img.shields.io/badge/SLSA-Level%203-green?style=flat-square)](https://slsa.dev) [![OpenSSF Best Practices](https://img.shields.io/cii/level/11662?style=flat-square)](https://www.bestpractices.dev/projects/11662)
 
-Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at [https://github.com/clouatre-labs/aptu](https://github.com/clouatre-labs/aptu).
+**AI-Powered Triage Utility** - A CLI for OSS issue triage with AI assistance.
 
-## Versions
+Aptu is a context-engineering experiment: instead of throwing big models at problems, it crafts tight prompts that let smaller models do the job with fewer tokens and surprising precision.
 
-| Version | Tag | Upstream commit |
-|---------|-----|-----------------|
-| v0.8.3 | [`v0.8.3`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.3) | [`26faf66`](https://github.com/clouatre-labs/aptu/commit/26faf669f25e754e4dd4488f77d31a81d2998c60) |
-| v0.8.6 | [`v0.8.6`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.6) | [`93ca6d6`](https://github.com/clouatre-labs/aptu/commit/93ca6d6613ebc2bb47f92caf48d10509ad0920e3) |
+## Benchmarks
+
+Head-to-head comparison of `aptu+mercury-2` ([Mercury 2](https://openrouter.ai/inception/mercury-2), a small diffusion-based LLM by Inception Labs) vs a raw `claude-opus-4.6` call (no schema, no rubric, no AST context) across 6 fixtures (3 triage, 3 PR review).
+
+| Arm | Quality (mean, /5) | Cost/call | Latency p50 |
+|-----|----------------|-----------|-------------|
+| aptu+mercury-2 | 4.8/5 | $0.0011 | 1,934 ms |
+| raw claude-opus-4.6 | 2.2/5 | $0.0193 | 16,032 ms |
+
+*Measured across aptu #737, #850, #1094 (triage) and #1091, #1098, #1101 (PR review); n=1 per fixture.*
+
+aptu+mercury-2 is **17x cheaper** and **8x faster** than a raw `claude-opus-4.6` call, while scoring more than twice as high on the structured rubric.
+
+See [docs/BENCHMARKS.md](https://github.com/clouatre-labs/aptu/blob/main/docs/BENCHMARKS.md) for full methodology, fixture breakdown, and C1-C5 scores.
+
+## Demo
+
+![Aptu Demo](https://raw.githubusercontent.com/clouatre-labs/aptu/main/assets/demo.gif)
+
+## Features
+
+- **AI Triage** - Summaries, suggested labels, clarifying questions, and contributor guidance
+- **Issue Discovery** - Find good-first-issues from curated repositories
+- **PR Analysis** - AI-powered pull request review and feedback; `aptu pr create --diff <file>` applies a patch, commits, and opens a PR
+- **Prompt Customization** - Override built-in system prompts per operation or append custom guidance via config
+- **GitHub Action** - Auto-triage incoming issues with labels and comments
+- **Multiple Providers** - Anthropic, Cerebras, Gemini, Groq, OpenRouter (default), Z.AI, and ZenMux
+- **Local History** - Track your contributions offline
+- **Multiple Outputs** - Text, JSON, YAML, Markdown, and SARIF
+- **Claude OAuth** - Authenticate with Anthropic via `~/.claude/credentials.json` (written by the Claude desktop app); no API key required
+- **Dependency Enrichment** - Automatically fetches upstream release notes for dependency bump PRs (Renovate / Dependabot)
+- **Observability** - Per-review context JSONL (`APTU_CONTEXT_FILE`) and token usage metrics (`APTU_METRICS_FILE`) for explainability and budget debugging (see [Observability](docs/GITHUB_ACTION.md#observability) and [Environment Variables](docs/CONFIGURATION.md#environment-variables))
+
+## Installation
+
+```bash
+# Homebrew (macOS/Linux)
+brew install clouatre-labs/tap/aptu
+
+# Cargo-binstall (fast)
+cargo binstall aptu-cli
+
+# Cargo
+cargo install aptu-cli
+```
+
+
+
+## Quick Start
+
+```bash
+aptu auth login            # Authenticate with GitHub
+aptu repo list             # List curated repositories
+aptu issue list block/goose          # Browse issues
+aptu issue triage block/goose#123    # Triage with AI
+aptu issue triage block/goose#123 --dry-run  # Preview
+aptu history               # View your contributions
+```
+
+## Security Scanning
+
+Aptu includes built-in security pattern detection for PR reviews. Scanning is performed locally, and no code is sent to external services.
+
+```bash
+aptu pr review owner/repo#123                       # Review with security scanning
+aptu scan-security . --output sarif                 # SARIF for GitHub Code Scanning
+```
+
+See [docs/SECURITY_SCANNING.md](https://github.com/clouatre-labs/aptu/blob/main/docs/SECURITY_SCANNING.md) for SARIF upload and GitHub integration.
+
+## Prompt Customization
+
+Aptu's built-in system prompts are compiled into the binary as defaults. You can override them per operation at runtime or append project-specific guidance globally.
+
+See [docs/CONFIGURATION.md](https://github.com/clouatre-labs/aptu/blob/main/docs/CONFIGURATION.md#prompt-customization) for file paths, operation names, and examples.
+
+## GitHub Action
+
+Auto-triage new issues with AI using any supported provider.
+
+```yaml
+- uses: clouatre-labs/aptu@v0
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+```
+
+Options: `apply-labels`, `no-comment`, `skip-labeled`, `dry-run`, `model`, `provider`.
+
+See [docs/GITHUB_ACTION.md](https://github.com/clouatre-labs/aptu/blob/main/docs/GITHUB_ACTION.md) for setup and examples.
+
+## Configuration
+
+See [docs/CONFIGURATION.md](https://github.com/clouatre-labs/aptu/blob/main/docs/CONFIGURATION.md) for AI provider setup.
+
+## Models
+
+Use `aptu models list` to discover available models from all configured providers.
+
+### Discovering models
+
+```
+aptu models list                                # all providers
+aptu models list --provider openrouter          # OpenRouter only
+```
+
+### Filtering and sorting
+
+| Flag | Description |
+|------|-------------|
+| `--provider` | Filter to a specific provider |
+| `--sort name\|context` | Sort by name or context window size |
+| `--min-context N` | Show only models with at least N tokens of context |
+| `--filter TEXT` | Filter by name or ID (case-insensitive substring match) |
+
+### Free-tier models
+
+OpenRouter exposes pricing data for each model. Models with zero prompt and completion cost are labeled **free** in the output. Use `--provider openrouter` to browse free models.
+
+## Security
+
+- **OpenSSF Best Practices Silver** - Fewer than 1% of open source projects reach this level
+- **SLSA Level 3** - Provenance attestations for all releases
+- **REUSE/SPDX** - License compliance for all files
+- **Signed Commits** - GPG-signed commits required
+- **Dependency Scanning** - Automated updates via Renovate
+
+See [SECURITY.md](https://github.com/clouatre-labs/aptu/blob/main/SECURITY.md) for reporting and verification.
+
+## Architecture
+
+Aptu is a multi-crate Rust workspace. See [docs/ARCHITECTURE.md](https://github.com/clouatre-labs/aptu/blob/main/docs/ARCHITECTURE.md) for the full crate structure, data flow, and key dependencies.
+
+## Roadmap
+
+See [docs/ROADMAP.md](https://github.com/clouatre-labs/aptu/blob/main/docs/ROADMAP.md) for the project direction across near-term, medium-term, and long-term horizons.
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](https://github.com/clouatre-labs/aptu/blob/main/CONTRIBUTING.md) for guidelines. See [docs/REPO-STANDARDS.md](https://github.com/clouatre-labs/aptu/blob/main/docs/REPO-STANDARDS.md) for a full artifact map and rationale covering CI workflows, tooling, and security controls.
+
+## License
+
+Apache-2.0. See [LICENSE](https://github.com/clouatre-labs/aptu/blob/main/LICENSE).
 
 ## Privacy
 

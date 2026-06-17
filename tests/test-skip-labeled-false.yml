@@ -1,0 +1,38 @@
+name: Test skip-labeled=false bypasses skip check
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: workflow_dispatch
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          skip-labeled: 'false'
+
+      - name: Assert metrics outputs are present (action ran without skip)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          # When skip-labeled=false, the action should not skip and metrics-aggregate should run
+          # With no AI calls, input-tokens should be 0
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          # cache-hit-ratio should be n/a when no tokens used
+          if [ "$CACHE_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_RATIO'"
+            exit 1
+          fi
+          echo "PASS"

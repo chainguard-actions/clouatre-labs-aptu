@@ -1,0 +1,97 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+
+jobs:
+  test-fallback-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install mock gh binary
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          MOCK_GH="$HOME/.local/bin/gh"
+          printf '%s\n' '#!/bin/bash' 'set -e' > "$MOCK_GH"
+          printf '%s\n' 'if [[ "$*" == *"releases"* ]]; then echo "0.8.3"; exit 0; fi' >> "$MOCK_GH"
+          printf '%s\n' 'if [[ "$1" == "release" && "$2" == "download" ]]; then' >> "$MOCK_GH"
+          printf '%s\n' '  DIR=""' >> "$MOCK_GH"
+          printf '%s\n' '  PATTERN=""' >> "$MOCK_GH"
+          printf '%s\n' '  prev=""' >> "$MOCK_GH"
+          printf '%s\n' '  for arg in "$@"; do' >> "$MOCK_GH"
+          printf '%s\n' '    if [[ "$prev" == "-D" ]]; then DIR="$arg"; fi' >> "$MOCK_GH"
+          printf '%s\n' '    if [[ "$prev" == "--pattern" && "$arg" == *.tar.gz ]]; then PATTERN="$arg"; fi' >> "$MOCK_GH"
+          printf '%s\n' '    prev="$arg"' >> "$MOCK_GH"
+          printf '%s\n' '  done' >> "$MOCK_GH"
+          printf '%s\n' '  if [[ -z "$DIR" ]]; then echo "mock gh: -D dir not found" >&2; exit 1; fi' >> "$MOCK_GH"
+          printf '%s\n' '  if [[ -z "$PATTERN" ]]; then' >> "$MOCK_GH"
+          printf '%s\n' '    case "$(uname -m)" in aarch64|arm64) ARCH="aarch64" ;; *) ARCH="x86_64" ;; esac' >> "$MOCK_GH"
+          printf '%s\n' '    PATTERN="aptu-cli-0.8.3-${ARCH}-unknown-linux-musl.tar.gz"' >> "$MOCK_GH"
+          printf '%s\n' '  fi' >> "$MOCK_GH"
+          printf '%s\n' '  printf "#!/bin/bash\necho mock aptu\nexit 0\n" > "$DIR/aptu"' >> "$MOCK_GH"
+          printf '%s\n' '  chmod +x "$DIR/aptu"' >> "$MOCK_GH"
+          printf '%s\n' '  tar -czf "$DIR/$PATTERN" -C "$DIR" aptu' >> "$MOCK_GH"
+          printf '%s\n' '  (cd "$DIR" && sha256sum "$PATTERN" > "${PATTERN%.tar.gz}.sha256")' >> "$MOCK_GH"
+          printf '%s\n' '  exit 0' >> "$MOCK_GH"
+          printf '%s\n' 'fi' >> "$MOCK_GH"
+          printf '%s\n' 'if [[ "$1" == "attestation" ]]; then echo "mock gh: attestation ok"; exit 0; fi' >> "$MOCK_GH"
+          printf '%s\n' 'echo "mock gh: unhandled: $*" >&2; exit 0' >> "$MOCK_GH"
+          chmod +x "$MOCK_GH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+
+      - name: Assert fallback config file was created
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: config file not found at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          echo "PASS: config file exists"
+
+      - name: Assert fallback config contains correct provider
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'provider = "openrouter"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected provider"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: provider found in config"
+
+      - name: Assert fallback config contains correct model
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'model = "inception/mercury-2"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected model"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: model found in config"
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS"

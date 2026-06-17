@@ -1,0 +1,53 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: workflow_dispatch
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: dummy-anthropic-key
+          cerebras-api-key: dummy-cerebras-key
+          gemini-api-key: dummy-gemini-key
+          groq-api-key: dummy-groq-key
+          openrouter-api-key: dummy-openrouter-key
+          zai-api-key: dummy-zai-key
+          zenmux-api-key: dummy-zenmux-key
+          instructions-file: ''
+          provider: ''
+          model: ''
+          fallback-provider: ''
+          fallback-model: ''
+          dry-run: 'true'
+          no-comment: 'true'
+          skip-labeled: 'false'
+          apply-labels: 'false'
+          pr-queue: 'false'
+          scan-path: ''
+          scan-security-diff: ''
+        continue-on-error: true
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          # Metrics aggregate step always runs; outputs should be set (even if 0/n/a)
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output was not set"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are present"

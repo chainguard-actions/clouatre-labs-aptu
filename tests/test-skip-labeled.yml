@@ -1,0 +1,93 @@
+name: Test skip-labeled logic
+on:
+  workflow_dispatch:
+
+jobs:
+  test-skip-labeled:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install mock gh binary
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          MOCK_GH="$HOME/.local/bin/gh"
+          printf '%s\n' '#!/bin/bash' 'set -e' > "$MOCK_GH"
+          printf '%s\n' 'if [[ "$*" == *"releases"* ]]; then echo "0.8.3"; exit 0; fi' >> "$MOCK_GH"
+          printf '%s\n' 'if [[ "$1" == "release" && "$2" == "download" ]]; then' >> "$MOCK_GH"
+          printf '%s\n' '  DIR=""' >> "$MOCK_GH"
+          printf '%s\n' '  PATTERN=""' >> "$MOCK_GH"
+          printf '%s\n' '  prev=""' >> "$MOCK_GH"
+          printf '%s\n' '  for arg in "$@"; do' >> "$MOCK_GH"
+          printf '%s\n' '    if [[ "$prev" == "-D" ]]; then DIR="$arg"; fi' >> "$MOCK_GH"
+          printf '%s\n' '    if [[ "$prev" == "--pattern" && "$arg" == *.tar.gz ]]; then PATTERN="$arg"; fi' >> "$MOCK_GH"
+          printf '%s\n' '    prev="$arg"' >> "$MOCK_GH"
+          printf '%s\n' '  done' >> "$MOCK_GH"
+          printf '%s\n' '  if [[ -z "$DIR" ]]; then echo "mock gh: -D dir not found" >&2; exit 1; fi' >> "$MOCK_GH"
+          printf '%s\n' '  if [[ -z "$PATTERN" ]]; then' >> "$MOCK_GH"
+          printf '%s\n' '    case "$(uname -m)" in aarch64|arm64) ARCH="aarch64" ;; *) ARCH="x86_64" ;; esac' >> "$MOCK_GH"
+          printf '%s\n' '    PATTERN="aptu-cli-0.8.3-${ARCH}-unknown-linux-musl.tar.gz"' >> "$MOCK_GH"
+          printf '%s\n' '  fi' >> "$MOCK_GH"
+          printf '%s\n' '  printf "#!/bin/bash\necho mock aptu\nexit 0\n" > "$DIR/aptu"' >> "$MOCK_GH"
+          printf '%s\n' '  chmod +x "$DIR/aptu"' >> "$MOCK_GH"
+          printf '%s\n' '  tar -czf "$DIR/$PATTERN" -C "$DIR" aptu' >> "$MOCK_GH"
+          printf '%s\n' '  (cd "$DIR" && sha256sum "$PATTERN" > "${PATTERN%.tar.gz}.sha256")' >> "$MOCK_GH"
+          printf '%s\n' '  exit 0' >> "$MOCK_GH"
+          printf '%s\n' 'fi' >> "$MOCK_GH"
+          printf '%s\n' 'if [[ "$1" == "attestation" ]]; then echo "mock gh: attestation ok"; exit 0; fi' >> "$MOCK_GH"
+          printf '%s\n' 'echo "mock gh: unhandled: $*" >&2; exit 0' >> "$MOCK_GH"
+          chmod +x "$MOCK_GH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert input-tokens is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert output-tokens is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert duration-ms is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert cache-hit-ratio is n/a
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"

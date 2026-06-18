@@ -1,0 +1,63 @@
+name: Test skip-labeled behavior
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Test skip-labeled=false (should not skip)
+        id: action-no-skip
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+        continue-on-error: true
+
+      - name: Assert metrics outputs are present when skip-labeled=false
+        env:
+          CACHE_HIT_RATIO: ${{ steps.action-no-skip.outputs.cache-hit-ratio }}
+          INPUT_TOKENS: ${{ steps.action-no-skip.outputs.input-tokens }}
+        run: |
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          echo "input-tokens: $INPUT_TOKENS"
+          # Metrics aggregate step always runs (if: always()), so outputs must be set
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio should be set even when skip-labeled=false"
+            exit 1
+          fi
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens should be set even when skip-labeled=false"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are present"
+
+      - name: Test skip-labeled=true with no issue labels (should not skip)
+        id: action-skip-true-no-labels
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+        continue-on-error: true
+
+      - name: Assert metrics outputs are present when skip-labeled=true but no labels
+        env:
+          CACHE_HIT_RATIO: ${{ steps.action-skip-true-no-labels.outputs.cache-hit-ratio }}
+          INPUT_TOKENS: ${{ steps.action-skip-true-no-labels.outputs.input-tokens }}
+        run: |
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          echo "input-tokens: $INPUT_TOKENS"
+          # Metrics aggregate step always runs (if: always()), so outputs must be set
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio should be set"
+            exit 1
+          fi
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens should be set"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are present"

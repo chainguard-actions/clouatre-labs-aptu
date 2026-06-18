@@ -1,0 +1,48 @@
+name: Test no fallback config when fallback-provider is empty
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: ''
+          fallback-model: ''
+          dry-run: 'true'
+          skip-labeled: 'false'
+        continue-on-error: true
+
+      - name: Assert fallback config file was NOT written when fallback-provider is empty
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking that config file does NOT exist at: $CONFIG_FILE"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "Config file contents:"
+            cat "$CONFIG_FILE"
+            echo "FAIL: fallback config file should not be created when fallback-provider is empty"
+            exit 1
+          fi
+          echo "PASS: fallback config file was not created (as expected)"
+
+      - name: Assert metrics outputs are present
+        env:
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          echo "input-tokens: $INPUT_TOKENS"
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output should not be empty"
+            exit 1
+          fi
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output should not be empty"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are present"

@@ -1,0 +1,64 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+          skip-labeled: 'false'
+        continue-on-error: true
+
+      - name: Assert fallback config file was written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config file was not created at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          # Verify the config contains the expected provider
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config file does not contain 'openrouter'"
+            exit 1
+          fi
+          # Verify the config contains the expected model
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config file does not contain 'inception/mercury-2'"
+            exit 1
+          fi
+          echo "PASS: fallback config file was created with correct content"
+
+      - name: Assert metrics outputs are present
+        env:
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "effective-token-units: $ETU"
+          # All metrics outputs should be set (metrics-aggregate runs with if: always())
+          for var_name in CACHE_HIT_RATIO INPUT_TOKENS OUTPUT_TOKENS DURATION_MS ETU; do
+            eval "val=\$$var_name"
+            if [ -z "$val" ]; then
+              echo "FAIL: $var_name output should not be empty"
+              exit 1
+            fi
+          done
+          echo "PASS: all metrics outputs are present"

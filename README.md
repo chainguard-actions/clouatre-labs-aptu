@@ -12,6 +12,7 @@ Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at
 | v0.8.4 | [`v0.8.4`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.4) | [`b505a0c`](https://github.com/clouatre-labs/aptu/commit/b505a0c3144c113c77f1607025c0cc7f60c654d6) |
 | v0.8.6 | [`v0.8.6`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.6) | [`93ca6d6`](https://github.com/clouatre-labs/aptu/commit/93ca6d6613ebc2bb47f92caf48d10509ad0920e3) |
 | v0.8.7 | [`v0.8.7`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.7) | [`0af22c3`](https://github.com/clouatre-labs/aptu/commit/0af22c3b34dffa8f9a41e61185bfae916ea8f706) |
+| v0.9.0 | [`v0.9.0`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.9.0) | [`08b5be9`](https://github.com/clouatre-labs/aptu/commit/08b5be92ad18c49bc4ed1fc8858da44ef15bf7f3) |
 
 ## Privacy
 

@@ -1,0 +1,73 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+jobs:
+  test-fallback-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with custom fallback provider and model
+        id: action
+        uses: .
+        env:
+          GITHUB_EVENT_NAME: workflow_dispatch
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'mistralai/mistral-small-2603'
+          dry-run: 'true'
+          no-comment: 'true'
+          pr-queue: 'false'
+        # The fallback config writing step runs when fallback-provider or
+        # fallback-model is non-empty. The aptu binary install may fail
+        # without real credentials, but we can still check the config file.
+        continue-on-error: true
+
+      - name: Assert fallback config file was created
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+
+          # Verify the config contains the expected provider and model
+          if ! grep -q 'provider = "openrouter"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected provider 'openrouter'"
+            exit 1
+          fi
+          if ! grep -q 'model = "mistralai/mistral-small-2603"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected model 'mistralai/mistral-small-2603'"
+            exit 1
+          fi
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain [ai.fallback] section"
+            exit 1
+          fi
+          echo "PASS: fallback config file created with correct content"
+
+      - name: Assert metrics outputs are present (always runs)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are correct"

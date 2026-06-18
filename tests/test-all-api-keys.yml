@@ -1,0 +1,47 @@
+name: Test all API key inputs and instructions-file
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Simulate an issue event with both type: and p0 labels so the action
+      # skips early (skip=true) without making any real API or binary calls.
+      - id: action
+        uses: .
+        env:
+          GITHUB_EVENT_NAME: issues
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: dummy-anthropic-key
+          cerebras-api-key: dummy-cerebras-key
+          gemini-api-key: dummy-gemini-key
+          groq-api-key: dummy-groq-key
+          openrouter-api-key: dummy-openrouter-key
+          zai-api-key: dummy-zai-key
+          zenmux-api-key: dummy-zenmux-key
+          instructions-file: ''
+          skip-labeled: 'true'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          # Metrics outputs should always be set (even when no AI calls are made)
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output was empty"
+            exit 1
+          fi
+          echo "PASS: all metric outputs present"

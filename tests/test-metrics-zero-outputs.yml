@@ -1,0 +1,65 @@
+name: Test metrics zero outputs when no AI calls made
+on:
+  workflow_dispatch:
+jobs:
+  test-metrics-zero:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with skip-labeled=false and no event match
+        id: action
+        uses: .
+        env:
+          # Use workflow_dispatch event - no issue/PR/schedule event handlers fire
+          GITHUB_EVENT_NAME: workflow_dispatch
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+          pr-queue: 'false'
+        # The action will try to resolve the aptu version via gh api.
+        # With workflow_dispatch, none of the issue/PR/schedule steps run.
+        # The metrics aggregate step always runs and outputs zeros.
+        continue-on-error: true
+
+      - name: Assert zero metrics outputs
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          COST_USD: ${{ steps.action.outputs.cost-usd }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cost-usd: $COST_USD"
+          echo "effective-token-units: $ETU"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # When no aptu commands run, the metrics file doesn't exist.
+          # The aggregate step outputs zeros and n/a for cache-hit-ratio.
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$DURATION_MS'"
+            exit 1
+          fi
+          if [ "$ETU" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got '$ETU'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS: all zero metrics outputs are correct"

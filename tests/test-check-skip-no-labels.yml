@@ -1,0 +1,74 @@
+name: Test check-skip outputs skip=false when no issue labels
+on:
+  workflow_dispatch:
+jobs:
+  test-check-skip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with skip-labeled=true but no issue labels
+        id: action
+        uses: .
+        env:
+          # workflow_dispatch has no issue labels, so skip should be false
+          GITHUB_EVENT_NAME: workflow_dispatch
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+          no-comment: 'true'
+          pr-queue: 'false'
+        # The action will proceed past check-skip (skip=false) and try to
+        # install aptu. We allow failure since we don't have real API keys.
+        continue-on-error: true
+
+      - name: Assert metrics outputs exist (metrics-aggregate always runs)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "effective-token-units: $ETU"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # The metrics-aggregate step always runs (if: always()) and
+          # outputs zeros when no aptu commands ran successfully.
+          # Verify all expected outputs are set (not empty).
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms output is empty"
+            exit 1
+          fi
+          if [ -z "$ETU" ]; then
+            echo "FAIL: effective-token-units output is empty"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          echo "PASS: all metric outputs are non-empty"
+
+          # When no aptu commands ran, expect zero token counts
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS: zero metrics confirmed"

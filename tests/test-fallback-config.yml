@@ -1,0 +1,153 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+
+jobs:
+  test-fallback-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Set up fake gh and aptu binaries so the action can run without network access.
+      - name: Setup fake gh and aptu binaries
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+
+          # Create a fake aptu binary
+          cat > "$HOME/.local/bin/aptu" << 'APTU_EOF'
+          #!/bin/bash
+          echo "fake aptu called with: $*"
+          exit 0
+          APTU_EOF
+          chmod +x "$HOME/.local/bin/aptu"
+
+          # Pre-build fake archives for both architectures
+          FAKE_VERSION="0.8.4"
+          FAKE_STAGE=$(mktemp -d)
+          mkdir -p "$FAKE_STAGE/content"
+          cp "$HOME/.local/bin/aptu" "$FAKE_STAGE/content/aptu"
+
+          for ARCH in x86_64 aarch64; do
+            ARCHIVE="aptu-cli-${FAKE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+            tar -czf "$FAKE_STAGE/$ARCHIVE" -C "$FAKE_STAGE/content" aptu
+            SHA=$(sha256sum "$FAKE_STAGE/$ARCHIVE" | awk '{print $1}')
+            echo "$SHA  $ARCHIVE" > "$FAKE_STAGE/${ARCHIVE%.tar.gz}.sha256"
+          done
+
+          echo "$FAKE_STAGE" > /tmp/aptu-fake-stage
+
+          # Create fake gh binary
+          cat > "$HOME/.local/bin/gh" << 'GH_EOF'
+          #!/bin/bash
+          FAKE_STAGE=$(cat /tmp/aptu-fake-stage 2>/dev/null || echo "")
+
+          case "$1" in
+            api)
+              HAS_JQ=false
+              for arg in "$@"; do
+                if [[ "$arg" == "--jq" ]]; then HAS_JQ=true; fi
+              done
+              if $HAS_JQ; then
+                echo "v0.8.4"
+              else
+                echo '[{"tag_name":"v0.8.4"}]'
+              fi
+              exit 0
+              ;;
+            release)
+              DEST_DIR=""
+              prev=""
+              for arg in "$@"; do
+                if [[ "$prev" == "-D" ]]; then DEST_DIR="$arg"; fi
+                prev="$arg"
+              done
+              if [[ -n "$DEST_DIR" && -n "$FAKE_STAGE" ]]; then
+                cp "$FAKE_STAGE"/*.tar.gz "$DEST_DIR/" 2>/dev/null || true
+                cp "$FAKE_STAGE"/*.sha256 "$DEST_DIR/" 2>/dev/null || true
+              fi
+              exit 0
+              ;;
+            attestation)
+              echo "Attestation verified (fake)"
+              exit 0
+              ;;
+            *)
+              exit 0
+              ;;
+          esac
+          GH_EOF
+          chmod +x "$HOME/.local/bin/gh"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Run the action with explicit fallback provider/model settings.
+      # The "Write fallback AI config" step should create ~/.config/aptu/config.toml
+      # with the specified provider and model in TOML format.
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+          pr-queue: 'false'
+
+      - name: Assert fallback config file was created
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: config file not found at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          echo "PASS: config file exists"
+
+      - name: Assert fallback config contains correct TOML section
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain [ai.fallback] section"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: TOML structure is correct"
+
+      - name: Assert fallback config contains correct provider
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'provider = "openrouter"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected provider"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: provider is correct"
+
+      - name: Assert fallback config contains correct model
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'model = "inception/mercury-2"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected model"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: model is correct"
+
+      - name: Assert metrics defaults are correct
+        env:
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          echo "input-tokens: $INPUT_TOKENS"
+          if [ "$CACHE_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio='n/a', got '$CACHE_RATIO'"
+            exit 1
+          fi
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          echo "PASS: metrics defaults are correct"

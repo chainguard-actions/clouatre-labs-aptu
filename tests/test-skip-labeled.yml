@@ -1,0 +1,121 @@
+name: Test skip-labeled behavior
+on:
+  workflow_dispatch:
+
+jobs:
+  test-skip-labeled:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Set up fake gh and aptu binaries so the action can run without network access.
+      # The action resolves/downloads/installs aptu via gh; we intercept those calls.
+      - name: Setup fake gh and aptu binaries
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+
+          # Create a fake aptu binary
+          cat > "$HOME/.local/bin/aptu" << 'APTU_EOF'
+          #!/bin/bash
+          echo "fake aptu called with: $*"
+          exit 0
+          APTU_EOF
+          chmod +x "$HOME/.local/bin/aptu"
+
+          # Pre-build fake archives for both architectures
+          FAKE_VERSION="0.8.4"
+          FAKE_STAGE=$(mktemp -d)
+          mkdir -p "$FAKE_STAGE/content"
+          cp "$HOME/.local/bin/aptu" "$FAKE_STAGE/content/aptu"
+
+          for ARCH in x86_64 aarch64; do
+            ARCHIVE="aptu-cli-${FAKE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+            tar -czf "$FAKE_STAGE/$ARCHIVE" -C "$FAKE_STAGE/content" aptu
+            SHA=$(sha256sum "$FAKE_STAGE/$ARCHIVE" | awk '{print $1}')
+            echo "$SHA  $ARCHIVE" > "$FAKE_STAGE/${ARCHIVE%.tar.gz}.sha256"
+          done
+
+          # Save stage dir for the fake gh to reference
+          echo "$FAKE_STAGE" > /tmp/aptu-fake-stage
+
+          # Create fake gh binary
+          cat > "$HOME/.local/bin/gh" << 'GH_EOF'
+          #!/bin/bash
+          FAKE_STAGE=$(cat /tmp/aptu-fake-stage 2>/dev/null || echo "")
+
+          case "$1" in
+            api)
+              # Return the tag name when --jq is used (gh api --jq '...')
+              HAS_JQ=false
+              for arg in "$@"; do
+                if [[ "$arg" == "--jq" ]]; then HAS_JQ=true; fi
+              done
+              if $HAS_JQ; then
+                echo "v0.8.4"
+              else
+                echo '[{"tag_name":"v0.8.4"}]'
+              fi
+              exit 0
+              ;;
+            release)
+              # gh release download ... -D <dir>
+              DEST_DIR=""
+              prev=""
+              for arg in "$@"; do
+                if [[ "$prev" == "-D" ]]; then DEST_DIR="$arg"; fi
+                prev="$arg"
+              done
+              if [[ -n "$DEST_DIR" && -n "$FAKE_STAGE" ]]; then
+                cp "$FAKE_STAGE"/*.tar.gz "$DEST_DIR/" 2>/dev/null || true
+                cp "$FAKE_STAGE"/*.sha256 "$DEST_DIR/" 2>/dev/null || true
+              fi
+              exit 0
+              ;;
+            attestation)
+              echo "Attestation verified (fake)"
+              exit 0
+              ;;
+            *)
+              exit 0
+              ;;
+          esac
+          GH_EOF
+          chmod +x "$HOME/.local/bin/gh"
+
+          # Prepend to PATH for this and subsequent steps
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # With workflow_dispatch, github.event.issue.labels is empty so skip=false.
+      # The action will install the fake aptu binary and run through all steps.
+      # No AI-specific steps run (not an issues/pull_request/schedule event),
+      # so metrics should default to zero.
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+
+      - name: Assert metrics default to zero (no AI calls made)
+        env:
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          if [ "$CACHE_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio='n/a', got '$CACHE_RATIO'"
+            exit 1
+          fi
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          echo "PASS: action completed and metrics defaulted to zero/n/a"

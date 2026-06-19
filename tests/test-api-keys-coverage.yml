@@ -1,0 +1,73 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: workflow_dispatch
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: fake-anthropic-key
+          cerebras-api-key: fake-cerebras-key
+          gemini-api-key: fake-gemini-key
+          groq-api-key: fake-groq-key
+          openrouter-api-key: fake-openrouter-key
+          zai-api-key: fake-zai-key
+          zenmux-api-key: fake-zenmux-key
+          instructions-file: /dev/null
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          skip-labeled: 'false'
+          pr-queue: 'false'
+
+      - name: Assert metrics outputs are set
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output not set"
+            exit 1
+          fi
+          if [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output not set"
+            exit 1
+          fi
+          if [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms output not set"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output not set"
+            exit 1
+          fi
+          echo "PASS: all metric outputs are set"
+
+      - name: Assert fallback config was written with all provider keys accepted
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking fallback config at $CONFIG"
+          if [ ! -f "$CONFIG" ]; then
+            echo "FAIL: fallback config not found at $CONFIG"
+            exit 1
+          fi
+          echo "Config contents:"
+          cat "$CONFIG"
+          if ! grep -q 'ai.fallback' "$CONFIG"; then
+            echo "FAIL: config does not contain ai.fallback section"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"

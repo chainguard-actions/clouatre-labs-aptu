@@ -8,6 +8,7 @@ Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at
 
 | Version | Tag | Upstream commit |
 |---------|-----|-----------------|
+| v0.10.0 | [`v0.10.0`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.10.0) | [`7e1b803`](https://github.com/clouatre-labs/aptu/commit/7e1b803b20f5017819c0ab78c1f596eee1b74f49) |
 | v0.8.3 | [`v0.8.3`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.3) | [`26faf66`](https://github.com/clouatre-labs/aptu/commit/26faf669f25e754e4dd4488f77d31a81d2998c60) |
 | v0.8.4 | [`v0.8.4`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.4) | [`b505a0c`](https://github.com/clouatre-labs/aptu/commit/b505a0c3144c113c77f1607025c0cc7f60c654d6) |
 | v0.8.5 | [`v0.8.5`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.5) | [`73b96b7`](https://github.com/clouatre-labs/aptu/commit/73b96b78cf358cd085c26fac86613a450168d3b6) |

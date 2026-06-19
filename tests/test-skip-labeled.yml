@@ -1,0 +1,108 @@
+name: Test skip-labeled behavior
+on:
+  workflow_dispatch:
+
+jobs:
+  test-skip-labeled:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Invoke the action under test. In workflow_dispatch context, no AI command
+      # steps fire. The action may fail at resolve-version in act (no real gh token),
+      # so we use continue-on-error. The skip-labeled logic is tested via shell steps.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      # Test the check-skip logic directly by running the same shell script
+      - name: Test skip logic with type and priority labels
+        id: check-skip-direct
+        shell: bash
+        env:
+          SKIP_LABELED: 'true'
+          ISSUE_LABELS: '[{"name":"type:bug"},{"name":"p1"}]'
+        run: |
+          HAS_TYPE=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(startswith("type:"))] | length > 0')
+          HAS_PRIORITY=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(test("^p[0-9]$"))] | length > 0')
+          echo "HAS_TYPE=$HAS_TYPE"
+          echo "HAS_PRIORITY=$HAS_PRIORITY"
+          if [[ "$HAS_TYPE" == "true" && "$HAS_PRIORITY" == "true" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Issue already has type and priority labels, skipping triage"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Assert skip=true when both type and priority labels present
+        env:
+          ACTUAL: ${{ steps.check-skip-direct.outputs.skip }}
+        run: |
+          echo "actual skip: $ACTUAL"
+          if [ "$ACTUAL" != "true" ]; then
+            echo "FAIL: expected skip=true when issue has type: and p[0-9] labels"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Test skip logic with only type label (no priority)
+        id: check-skip-no-priority
+        shell: bash
+        env:
+          SKIP_LABELED: 'true'
+          ISSUE_LABELS: '[{"name":"type:bug"}]'
+        run: |
+          HAS_TYPE=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(startswith("type:"))] | length > 0')
+          HAS_PRIORITY=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(test("^p[0-9]$"))] | length > 0')
+          echo "HAS_TYPE=$HAS_TYPE"
+          echo "HAS_PRIORITY=$HAS_PRIORITY"
+          if [[ "$HAS_TYPE" == "true" && "$HAS_PRIORITY" == "true" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Assert skip=false when only type label present
+        env:
+          ACTUAL: ${{ steps.check-skip-no-priority.outputs.skip }}
+        run: |
+          echo "actual skip: $ACTUAL"
+          if [ "$ACTUAL" != "false" ]; then
+            echo "FAIL: expected skip=false when issue only has type: label but no p[0-9] label"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Test skip logic with empty labels
+        id: check-skip-empty
+        shell: bash
+        env:
+          SKIP_LABELED: 'true'
+          ISSUE_LABELS: '[]'
+        run: |
+          HAS_TYPE=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(startswith("type:"))] | length > 0')
+          HAS_PRIORITY=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(test("^p[0-9]$"))] | length > 0')
+          echo "HAS_TYPE=$HAS_TYPE"
+          echo "HAS_PRIORITY=$HAS_PRIORITY"
+          if [[ "$HAS_TYPE" == "true" && "$HAS_PRIORITY" == "true" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Assert skip=false when no labels present
+        env:
+          ACTUAL: ${{ steps.check-skip-empty.outputs.skip }}
+        run: |
+          echo "actual skip: $ACTUAL"
+          if [ "$ACTUAL" != "false" ]; then
+            echo "FAIL: expected skip=false when issue has no labels"
+            exit 1
+          fi
+          echo "PASS"

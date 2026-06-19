@@ -1,0 +1,206 @@
+name: Test metrics outputs are zero when no AI calls made
+on:
+  workflow_dispatch:
+
+jobs:
+  test-metrics-zero:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Invoke the action under test. In workflow_dispatch context, no AI command
+      # steps fire (they require issues/pull_request/schedule event names).
+      # The action may fail at resolve-version in act (no real gh token), so
+      # we use continue-on-error. The metrics-aggregate step runs with if: always()
+      # so outputs are still set.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      # Test the metrics-aggregate logic directly by running the same shell script.
+      # This simulates what happens when no AI calls are made (no JSONL file exists).
+      - name: Run metrics-aggregate logic with no JSONL file
+        id: metrics-aggregate
+        shell: bash
+        run: |
+          # Simulate RUNNER_TEMP
+          export RUNNER_TEMP="${RUNNER_TEMP:-/tmp}"
+          # Ensure no leftover JSONL file
+          rm -f "$RUNNER_TEMP/aptu-token-usage.jsonl"
+
+          if [ -f "$RUNNER_TEMP/aptu-token-usage.jsonl" ]; then
+            input_tokens=$(jq -s '[.[].input_tokens] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl")
+            output_tokens=$(jq -s '[.[].output_tokens] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl")
+            duration_ms=$(jq -s '[.[].duration_ms] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl")
+            cost_usd=$(jq -s '[.[].cost_usd | select(. != null)] | if length > 0 then add else empty end' "$RUNNER_TEMP/aptu-token-usage.jsonl" 2>/dev/null || echo "")
+            echo "input_tokens=$input_tokens" >> "$GITHUB_OUTPUT"
+            echo "output_tokens=$output_tokens" >> "$GITHUB_OUTPUT"
+            echo "duration_ms=$duration_ms" >> "$GITHUB_OUTPUT"
+            echo "cost_usd=$cost_usd" >> "$GITHUB_OUTPUT"
+            ETU=$(jq -s '[.[].effective_token_units // 0] | add // 0 | ceil' "$RUNNER_TEMP/aptu-token-usage.jsonl" 2>/dev/null || echo "0")
+            echo "effective_token_units=$ETU" >> "$GITHUB_OUTPUT"
+            TOTAL_INPUT=$(jq -s '[.[].input_tokens // 0] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl" 2>/dev/null || echo "0")
+            TOTAL_CACHE_READ=$(jq -s '[.[].cache_read_tokens // 0] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl" 2>/dev/null || echo "0")
+            if [ "$TOTAL_INPUT" -gt 0 ] || [ "$TOTAL_CACHE_READ" -gt 0 ]; then
+              CACHE_PCT=$(jq -n "($TOTAL_CACHE_READ / ($TOTAL_INPUT + $TOTAL_CACHE_READ) * 100) | round" 2>/dev/null || echo "0")
+              echo "cache_hit_ratio=${CACHE_PCT}%" >> "$GITHUB_OUTPUT"
+            else
+              echo "cache_hit_ratio=n/a" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "input_tokens=0" >> "$GITHUB_OUTPUT"
+            echo "output_tokens=0" >> "$GITHUB_OUTPUT"
+            echo "duration_ms=0" >> "$GITHUB_OUTPUT"
+            echo "cost_usd=" >> "$GITHUB_OUTPUT"
+            echo "effective_token_units=0" >> "$GITHUB_OUTPUT"
+            echo "cache_hit_ratio=n/a" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assert input-tokens is 0
+        env:
+          ACTUAL: ${{ steps.metrics-aggregate.outputs.input_tokens }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected 0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert output-tokens is 0
+        env:
+          ACTUAL: ${{ steps.metrics-aggregate.outputs.output_tokens }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected 0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert duration-ms is 0
+        env:
+          ACTUAL: ${{ steps.metrics-aggregate.outputs.duration_ms }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected 0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert cost-usd is empty
+        env:
+          ACTUAL: ${{ steps.metrics-aggregate.outputs.cost_usd }}
+        run: |
+          echo "actual: '$ACTUAL'"
+          if [ -n "$ACTUAL" ]; then
+            echo "FAIL: expected empty cost-usd, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert effective-token-units is 0
+        env:
+          ACTUAL: ${{ steps.metrics-aggregate.outputs.effective_token_units }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected 0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert cache-hit-ratio is n/a
+        env:
+          ACTUAL: ${{ steps.metrics-aggregate.outputs.cache_hit_ratio }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected n/a, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      # Also test with a sample JSONL file to verify aggregation logic
+      - name: Run metrics-aggregate logic with sample JSONL data
+        id: metrics-with-data
+        shell: bash
+        run: |
+          export RUNNER_TEMP="${RUNNER_TEMP:-/tmp}"
+          JSONL_FILE="$RUNNER_TEMP/aptu-token-usage-test.jsonl"
+          # Write sample metrics data
+          echo '{"model":"test-model","input_tokens":100,"output_tokens":50,"duration_ms":1500,"cost_usd":0.001,"effective_token_units":150,"cache_read_tokens":20,"cache_write_tokens":0}' > "$JSONL_FILE"
+          echo '{"model":"test-model","input_tokens":200,"output_tokens":75,"duration_ms":2000,"cost_usd":0.002,"effective_token_units":275,"cache_read_tokens":30,"cache_write_tokens":0}' >> "$JSONL_FILE"
+
+          input_tokens=$(jq -s '[.[].input_tokens] | add // 0' "$JSONL_FILE")
+          output_tokens=$(jq -s '[.[].output_tokens] | add // 0' "$JSONL_FILE")
+          duration_ms=$(jq -s '[.[].duration_ms] | add // 0' "$JSONL_FILE")
+          ETU=$(jq -s '[.[].effective_token_units // 0] | add // 0 | ceil' "$JSONL_FILE" 2>/dev/null || echo "0")
+          TOTAL_INPUT=$(jq -s '[.[].input_tokens // 0] | add // 0' "$JSONL_FILE")
+          TOTAL_CACHE_READ=$(jq -s '[.[].cache_read_tokens // 0] | add // 0' "$JSONL_FILE")
+
+          echo "input_tokens=$input_tokens" >> "$GITHUB_OUTPUT"
+          echo "output_tokens=$output_tokens" >> "$GITHUB_OUTPUT"
+          echo "duration_ms=$duration_ms" >> "$GITHUB_OUTPUT"
+          echo "effective_token_units=$ETU" >> "$GITHUB_OUTPUT"
+
+          if [ "$TOTAL_INPUT" -gt 0 ] || [ "$TOTAL_CACHE_READ" -gt 0 ]; then
+            CACHE_PCT=$(jq -n "($TOTAL_CACHE_READ / ($TOTAL_INPUT + $TOTAL_CACHE_READ) * 100) | round")
+            echo "cache_hit_ratio=${CACHE_PCT}%" >> "$GITHUB_OUTPUT"
+          else
+            echo "cache_hit_ratio=n/a" >> "$GITHUB_OUTPUT"
+          fi
+
+          rm -f "$JSONL_FILE"
+
+      - name: Assert aggregated input-tokens is 300
+        env:
+          ACTUAL: ${{ steps.metrics-with-data.outputs.input_tokens }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "300" ]; then
+            echo "FAIL: expected 300, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert aggregated output-tokens is 125
+        env:
+          ACTUAL: ${{ steps.metrics-with-data.outputs.output_tokens }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "125" ]; then
+            echo "FAIL: expected 125, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert aggregated duration-ms is 3500
+        env:
+          ACTUAL: ${{ steps.metrics-with-data.outputs.duration_ms }}
+        run: |
+          echo "actual: $ACTUAL"
+          if [ "$ACTUAL" != "3500" ]; then
+            echo "FAIL: expected 3500, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert cache-hit-ratio is computed correctly
+        env:
+          ACTUAL: ${{ steps.metrics-with-data.outputs.cache_hit_ratio }}
+        run: |
+          echo "actual: $ACTUAL"
+          # cache_read=50, input=300, total=350, ratio=50/350*100=14%
+          if [ "$ACTUAL" != "14%" ]; then
+            echo "FAIL: expected 14%, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"

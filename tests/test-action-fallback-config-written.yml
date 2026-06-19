@@ -1,0 +1,75 @@
+name: Test action writes fallback AI config
+on:
+  workflow_dispatch:
+
+jobs:
+  test-action-fallback-config-written:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Ensure no pre-existing config
+      - name: Clean up any pre-existing aptu config
+        run: rm -f "$HOME/.config/aptu/config.toml"
+
+      # Invoke the action with fallback-provider and fallback-model set.
+      # The "Write fallback AI config" step runs unconditionally (no skip condition).
+      # The action will fail at resolve-version (no real gh token in act), but
+      # the fallback config is written before that step, so we use continue-on-error.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          skip-labeled: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert fallback config file was created
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking for config at: $CONFIG"
+          if [ ! -f "$CONFIG" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG"
+            exit 1
+          fi
+          echo "Config contents:"
+          cat "$CONFIG"
+          echo "PASS: config file exists"
+
+      - name: Assert config contains fallback provider
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'openrouter' "$CONFIG"; then
+            echo "FAIL: expected 'openrouter' in config"
+            cat "$CONFIG"
+            exit 1
+          fi
+          echo "PASS: provider found in config"
+
+      - name: Assert config contains fallback model
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'inception/mercury-2' "$CONFIG"; then
+            echo "FAIL: expected 'inception/mercury-2' in config"
+            cat "$CONFIG"
+            exit 1
+          fi
+          echo "PASS: model found in config"
+
+      - name: Assert config has correct TOML structure
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          if ! grep -q '\[ai.fallback\]' "$CONFIG"; then
+            echo "FAIL: expected '[ai.fallback]' section in config"
+            cat "$CONFIG"
+            exit 1
+          fi
+          echo "PASS: TOML structure is correct"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f "$HOME/.config/aptu/config.toml"

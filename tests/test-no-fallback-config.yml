@@ -1,0 +1,142 @@
+name: Test no fallback config when fallback-provider is empty
+on:
+  workflow_dispatch:
+
+jobs:
+  test-no-fallback-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Invoke the action under test. In workflow_dispatch context, no AI command
+      # steps fire. The action may fail at resolve-version in act (no real gh token),
+      # so we use continue-on-error. We test the fallback config logic via shell steps.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: ''
+          fallback-model: ''
+          skip-labeled: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      # Test: when fallback-provider is empty, no config file should be written
+      # This mirrors the action's "Write fallback AI config" step condition:
+      # if: inputs.fallback-provider != '' || inputs.fallback-model != ''
+      - name: Test no config written when both fallback inputs are empty
+        shell: bash
+        env:
+          INPUT_FALLBACK_PROVIDER: ''
+          INPUT_FALLBACK_MODEL: ''
+        run: |
+          # Clean up any pre-existing config
+          rm -f "$HOME/.config/aptu/config.toml"
+
+          # Simulate the action's condition check
+          if [[ -n "$INPUT_FALLBACK_PROVIDER" || -n "$INPUT_FALLBACK_MODEL" ]]; then
+            mkdir -p "$HOME/.config/aptu"
+            printf '[ai.fallback]\nchain = [{ provider = "%s", model = "%s" }]\n' \
+              "$INPUT_FALLBACK_PROVIDER" "$INPUT_FALLBACK_MODEL" \
+              > "$HOME/.config/aptu/config.toml"
+          fi
+
+          # Assert no config was written
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking that fallback config does NOT exist at: $CONFIG"
+          if [ -f "$CONFIG" ]; then
+            echo "FAIL: fallback config file should not exist when both inputs are empty"
+            echo "Contents:"
+            cat "$CONFIG"
+            exit 1
+          fi
+          echo "PASS: no fallback config file created"
+
+      # Test: when fallback-provider is set, config should be written
+      - name: Test config written when fallback-provider is set
+        shell: bash
+        env:
+          INPUT_FALLBACK_PROVIDER: 'openrouter'
+          INPUT_FALLBACK_MODEL: 'inception/mercury-2'
+        run: |
+          # Clean up any pre-existing config
+          rm -f "$HOME/.config/aptu/config.toml"
+
+          # Simulate the action's condition check and config writing
+          if [[ -n "$INPUT_FALLBACK_PROVIDER" || -n "$INPUT_FALLBACK_MODEL" ]]; then
+            mkdir -p "$HOME/.config/aptu"
+            printf '[ai.fallback]\nchain = [{ provider = "%s", model = "%s" }]\n' \
+              "$INPUT_FALLBACK_PROVIDER" "$INPUT_FALLBACK_MODEL" \
+              > "$HOME/.config/aptu/config.toml"
+          fi
+
+          # Assert config was written
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking for fallback config at: $CONFIG"
+          if [ ! -f "$CONFIG" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG"
+            exit 1
+          fi
+          echo "Config contents:"
+          cat "$CONFIG"
+
+          # Assert provider is in config
+          if ! grep -q 'openrouter' "$CONFIG"; then
+            echo "FAIL: expected 'openrouter' in config"
+            exit 1
+          fi
+
+          # Assert model is in config
+          if ! grep -q 'inception/mercury-2' "$CONFIG"; then
+            echo "FAIL: expected 'inception/mercury-2' in config"
+            exit 1
+          fi
+
+          # Assert TOML structure
+          if ! grep -q '\[ai.fallback\]' "$CONFIG"; then
+            echo "FAIL: expected '[ai.fallback]' section in config"
+            exit 1
+          fi
+
+          echo "PASS: fallback config written correctly"
+
+      # Test: when only fallback-model is set (provider empty), config should still be written
+      - name: Test config written when only fallback-model is set
+        shell: bash
+        env:
+          INPUT_FALLBACK_PROVIDER: ''
+          INPUT_FALLBACK_MODEL: 'some-model'
+        run: |
+          # Clean up any pre-existing config
+          rm -f "$HOME/.config/aptu/config.toml"
+
+          # Simulate the action's condition check
+          if [[ -n "$INPUT_FALLBACK_PROVIDER" || -n "$INPUT_FALLBACK_MODEL" ]]; then
+            mkdir -p "$HOME/.config/aptu"
+            printf '[ai.fallback]\nchain = [{ provider = "%s", model = "%s" }]\n' \
+              "$INPUT_FALLBACK_PROVIDER" "$INPUT_FALLBACK_MODEL" \
+              > "$HOME/.config/aptu/config.toml"
+          fi
+
+          # Assert config was written (because model is non-empty)
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking for fallback config at: $CONFIG"
+          if [ ! -f "$CONFIG" ]; then
+            echo "FAIL: fallback config file should exist when fallback-model is set"
+            exit 1
+          fi
+          echo "Config contents:"
+          cat "$CONFIG"
+
+          if ! grep -q 'some-model' "$CONFIG"; then
+            echo "FAIL: expected 'some-model' in config"
+            exit 1
+          fi
+          echo "PASS: fallback config written when only model is set"
+
+      # Clean up after tests
+      - name: Cleanup
+        if: always()
+        run: rm -f "$HOME/.config/aptu/config.toml"

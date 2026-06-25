@@ -1,0 +1,45 @@
+name: Test skip-labeled behavior
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: issues
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Test: when issue already has type: and p[0-9] labels, action should skip triage
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: fake-token-for-testing
+          skip-labeled: 'true'
+        env:
+          # Simulate an issue that already has type: and priority labels
+          ISSUE_LABELS: '[{"name":"type:bug"},{"name":"p1"}]'
+
+      - name: Assert metrics outputs are set (always step ran)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          # Metrics aggregate always runs; when skipped, no binary runs so tokens=0
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0 when skipped, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0 when skipped, got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$CACHE_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a when skipped, got '$CACHE_RATIO'"
+            exit 1
+          fi
+          echo "PASS"

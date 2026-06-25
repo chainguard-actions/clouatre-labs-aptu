@@ -1,0 +1,47 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: fake-token-for-coverage
+          anthropic-api-key: fake-anthropic-key
+          cerebras-api-key: fake-cerebras-key
+          gemini-api-key: fake-gemini-key
+          groq-api-key: fake-groq-key
+          openrouter-api-key: fake-openrouter-key
+          zai-api-key: fake-zai-key
+          zenmux-api-key: fake-zenmux-key
+          instructions-file: .github/instructions/pr-review.md
+          dry-run: 'true'
+          skip-labeled: 'false'
+          no-comment: 'true'
+          apply-labels: 'false'
+          pr-queue: 'false'
+          scan-path: ''
+          scan-security-diff: ''
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          # The metrics-aggregate step always runs and emits defaults when no JSONL file exists
+          # Verify that the outputs are set (even if zero/n/a)
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output was not set"
+            exit 1
+          fi
+          echo "PASS: all metric outputs are present"

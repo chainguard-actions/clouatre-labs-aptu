@@ -1,0 +1,65 @@
+name: Test metrics defaults (no metrics file)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: fake-token-for-testing
+        env:
+          GITHUB_EVENT_NAME: workflow_dispatch
+      - name: Assert input-tokens default to 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "actual input-tokens: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Assert output-tokens default to 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "actual output-tokens: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Assert duration-ms default to 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "actual duration-ms: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Assert cache-hit-ratio defaults to n/a
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "actual cache-hit-ratio: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Assert effective-token-units default to 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "actual effective-token-units: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"

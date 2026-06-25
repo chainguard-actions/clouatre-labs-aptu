@@ -1,0 +1,62 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The action writes fallback config before attempting binary install.
+      # We use continue-on-error since version resolution will fail without a real token.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: fake-token-for-testing
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+        env:
+          GITHUB_EVENT_NAME: workflow_dispatch
+
+      - name: Assert fallback config file was created
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config file was not created at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          echo "PASS: config file exists"
+
+      - name: Assert fallback config contains correct provider
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'openrouter'"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: provider found in config"
+
+      - name: Assert fallback config contains correct model
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'inception/mercury-2'"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: model found in config"
+
+      - name: Assert fallback config has correct TOML structure
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q '\[ai\.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain [ai.fallback] section"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: TOML structure is correct"

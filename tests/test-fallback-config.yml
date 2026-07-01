@@ -1,0 +1,83 @@
+name: Test fallback AI config is written
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The "Write fallback AI config" step runs when fallback-provider or fallback-model
+      # is set. It writes $HOME/.config/aptu/config.toml before the binary install step.
+      # We use continue-on-error since resolve-version will fail with a fake token.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: fake-token-for-test
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+
+      - name: Assert fallback config file was written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          echo "PASS: fallback config file exists"
+
+      - name: Assert fallback config contains correct provider
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'provider = "openrouter"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected provider 'openrouter'"
+            echo "Actual content:"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: config contains correct provider"
+
+      - name: Assert fallback config contains correct model
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'model = "inception/mercury-2"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected model 'inception/mercury-2'"
+            echo "Actual content:"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: config contains correct model"
+
+      - name: Assert fallback config has correct TOML section
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain [ai.fallback] section"
+            echo "Actual content:"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: config has [ai.fallback] section"
+
+      - name: Assert metrics outputs are set (always runs)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens=$INPUT_TOKENS"
+          echo "cache-hit-ratio=$CACHE_HIT_RATIO"
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS"

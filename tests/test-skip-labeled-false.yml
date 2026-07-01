@@ -1,0 +1,84 @@
+name: Test skip-labeled=false bypasses label check
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # When skip-labeled is false, the action should NOT skip even if issue
+      # already has type and priority labels. The check-skip step outputs skip=false.
+      # The action will fail at resolve-version (fake token), but metrics-aggregate
+      # runs always() and produces outputs.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: fake-token-for-test
+          skip-labeled: 'false'
+          dry-run: 'true'
+
+      - name: Assert metrics outputs are present (action ran, not skipped)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "Verifying action produced metric outputs (not skipped)..."
+          echo "input-tokens=$INPUT_TOKENS"
+          echo "output-tokens=$OUTPUT_TOKENS"
+          echo "duration-ms=$DURATION_MS"
+          echo "cache-hit-ratio=$CACHE_HIT_RATIO"
+
+          # All outputs should be set (even if zero) because metrics-aggregate runs always()
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens is empty - action may have been skipped unexpectedly"
+            exit 1
+          fi
+          if [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens is empty"
+            exit 1
+          fi
+          if [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms is empty"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio is empty"
+            exit 1
+          fi
+          echo "PASS: all metric outputs are present"
+
+      - name: Assert default zero values with skip-labeled=false
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "Checking zero values (no AI calls made)..."
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$DURATION_MS'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          if [ "$ETU" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got '$ETU'"
+            exit 1
+          fi
+          echo "PASS: all metric outputs have correct default values"

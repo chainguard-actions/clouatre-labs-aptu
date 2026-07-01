@@ -1,0 +1,75 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: workflow_dispatch
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token || 'dummy-token' }}
+          anthropic-api-key: 'test-anthropic-key'
+          cerebras-api-key: 'test-cerebras-key'
+          gemini-api-key: 'test-gemini-key'
+          groq-api-key: 'test-groq-key'
+          openrouter-api-key: 'test-openrouter-key'
+          zai-api-key: 'test-zai-key'
+          zenmux-api-key: 'test-zenmux-key'
+          instructions-file: '.github/instructions/pr-review.md'
+          dry-run: 'true'
+          no-comment: 'true'
+          skip-labeled: 'false'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms output is empty"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          echo "PASS: all metric outputs present"
+
+      - name: Assert fallback config was written
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking for fallback config at: $CONFIG"
+          if [ ! -f "$CONFIG" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG"
+            exit 1
+          fi
+          echo "Config contents:"
+          cat "$CONFIG"
+          if ! grep -q 'openrouter' "$CONFIG"; then
+            echo "FAIL: expected 'openrouter' in fallback config"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"

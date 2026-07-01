@@ -1,0 +1,312 @@
+# Aptu GitHub Action
+
+AI-powered automation for GitHub issues and pull requests.
+
+## Quick Start
+
+```yaml
+name: Aptu
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  aptu:
+    runs-on: ubuntu-24.04-arm  # arm64 runner; ~50% cheaper; aptu ships native arm64 binary
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: clouatre-labs/aptu@v0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+```
+
+Add your AI provider API key as a repository secret. No `provider` or `model` input is needed -- the action detects the provider from whichever API key is set, and uses a sensible default model for that provider.
+
+## What the Action Does
+
+The action auto-detects the event type and runs the appropriate commands:
+
+| Event | Commands | Description |
+|-------|----------|-------------|
+| `issues` | `aptu issue triage` | Analyze issue, suggest labels and milestone, post comment |
+| `pull_request` | `aptu pr label` then `aptu pr review` | Classify PR type, apply label, post advisory review comment |
+| `repository_dispatch` | `aptu pr label` then `aptu pr review` | Cross-repo PR review triggered from another repository; requires `repo` and `pull-number` inputs |
+| `schedule` | `aptu issue triage` (batch) | Triage all unlabeled issues since a given date |
+| Any (if `scan-path` or `scan-security-diff` set) | `aptu scan-security` | Scan for security issues, output SARIF |
+| Any (if `pr-queue: true`) | `aptu pr queue` | Output ranked reviewability list of open PRs |
+
+PR review is non-blocking (`continue-on-error: true`); a failure does not fail the workflow.
+
+## AI Providers
+
+Provide **one** API key. The action detects the provider automatically.
+
+| Provider | Input | Default Model |
+|----------|-------|---------------|
+| Anthropic | `anthropic-api-key` | (set via `model`) |
+| Cerebras | `cerebras-api-key` | (set via `model`) |
+| Google Gemini | `gemini-api-key` | `gemini-3.1-flash-lite` |
+| Groq | `groq-api-key` | (set via `model`) |
+| OpenRouter | `openrouter-api-key` | `mistralai/mistral-small-2603` |
+| Z.AI | `zai-api-key` | (set via `model`) |
+| ZenMux | `zenmux-api-key` | (set via `model`) |
+
+> Model IDs shown are defaults at time of writing. Use `aptu models list` to discover current available models.
+
+When no API key is provided the action falls back to `openrouter` / `inception/mercury-2` via the built-in fallback chain. Override with `provider` and `model` inputs. See [Configuration](CONFIGURATION.md) for details.
+
+## Inputs
+
+### Auth
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `github-token` | Yes | - | GitHub token for API access |
+
+### AI Provider API Keys
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `anthropic-api-key` | No | - | Anthropic API key |
+| `cerebras-api-key` | No | - | Cerebras API key |
+| `gemini-api-key` | No | - | Google Gemini API key |
+| `groq-api-key` | No | - | Groq API key |
+| `openrouter-api-key` | No | - | OpenRouter API key |
+| `zai-api-key` | No | - | Z.AI API key |
+| `zenmux-api-key` | No | - | ZenMux API key |
+
+### AI Model Selection
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `provider` | No | `openrouter` | AI provider to use (`anthropic`, `cerebras`, `gemini`, `groq`, `openrouter`, `zai`, `zenmux`) |
+| `model` | No | Provider default | Model identifier for the selected provider |
+| `fallback-provider` | No | `openrouter` | Provider to try when the primary fails; set to `''` to disable |
+| `fallback-model` | No | `inception/mercury-2` | Model for the fallback provider |
+
+### Behavior Flags
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `apply-labels` | No | `true` | Apply AI-suggested labels and milestone |
+| `dry-run` | No | `false` | Run without making changes |
+| `no-comment` | No | `false` | Skip posting comment to GitHub |
+| `skip-labeled` | No | `true` | Skip triage if the issue already has both a `type:` and a `p[0-9]` label |
+
+### Issue Triage
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `repo` | No | `''` | Target repository (`owner/repo`) for `repository_dispatch` invocations; required alongside `pull-number` to trigger PR steps |
+| `pull-number` | No | `''` | PR number for `repository_dispatch` invocations; required alongside `repo` to trigger PR label and PR review steps |
+| `since` | No | `''` | Batch triage: only triage issues created on or after this date (ISO 8601) |
+| `issue-state` | No | `open` | Batch triage: filter issues by state (`open`, `closed`, `all`) |
+
+### PR Review
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `instructions-file` | No | `''` | Path to instructions file; overrides default `AGENTS.md` / `.github/instructions/pr-review.md` discovery |
+| `repo-path` | No | `''` | Local repository root for AST context injection (Rust, Python, Go, Java, TypeScript, TSX, JS, C, C++, C#, Fortran); leave empty to skip. If omitted, aptu infers the repository root from the current working directory. Explicit values override inference. |
+| `deep` | No | `false` | Force cross-file call-graph context unconditionally. When omitted, call graph is auto-enabled when remaining prompt budget exceeds `min-budget-for-call-graph`. |
+
+**Prompt budget inputs** — all optional, defaults match the compiled-in values. Each maps to the corresponding `[review]` or `[prompt]` key in `config.toml` (see [docs/CONFIGURATION.md](CONFIGURATION.md#pr-review-limits)).
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `max-prompt-chars` | `120000` | Total prompt character budget. Sections are dropped in order (call graph, AST, full content, diff hunks) when exceeded. |
+| `max-full-content-files` | `10` | Maximum files fetched in full via the GitHub Contents API per review. |
+| `max-chars-per-file` | `16000` | Maximum characters of full file content per file. |
+| `max-diff-chars` | `200000` | Maximum total diff characters across all files. Diffs exceeding this are dropped from the prompt. |
+| `max-patch-chars-per-file` | `10000` | Maximum characters per individual file patch. Patches exceeding this are dropped entirely rather than sliced mid-hunk. |
+| `max-instructions-chars` | `1500` | Maximum characters of instructions file content. |
+| `min-budget-for-call-graph` | `20000` | Remaining prompt budget threshold below which call-graph enrichment is skipped. Set to `0` to always include it. The call-graph is enabled only when `budget_remaining > min_budget_for_call_graph` where `budget_remaining = max_prompt_chars - estimated_prompt_size`. A value >= `max-prompt-chars` disables call graph entirely. |
+| `max-dep-packages` | `3` | Maximum dependency bump packages for which upstream release notes are fetched. |
+| `max-dep-release-chars` | `2000` | Maximum characters of upstream release notes per dependency package. |
+| `max-diff-bytes` | `524288` | Maximum bytes for the raw PR diff; prompt-injection defence pre-check (512 KiB). Maps to `[prompt] max_diff_bytes`. |
+
+### Security Scan
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `scan-path` | No | `''` | Directory to scan; leave empty to skip |
+| `scan-security-diff` | No | `''` | Path to a unified diff file to scan (overrides `scan-path` when set) |
+
+### PR Queue
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `pr-queue` | No | `false` | Output a ranked reviewability list of open PRs |
+
+### Routing (advanced)
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `command` | No | `issue` | Top-level command (`issue` or `pr`); normally auto-detected from event |
+| `subcommand` | No | `triage` | Subcommand (`triage`, `label`, or `review`); normally auto-detected |
+
+## Outputs
+
+| Output | Description |
+|--------|-------------|
+| `input-tokens` | Total input tokens consumed across all AI calls |
+| `output-tokens` | Total output tokens consumed across all AI calls |
+| `duration-ms` | Total AI call duration in milliseconds |
+| `cost-usd` | Estimated cost in USD (provider-dependent; `n/a` when not reported) |
+| `effective-token-units` | Normalized throughput signal: `1.0·input + 0.1·cache_read + 1.25·cache_write + 5.0·output`. Comparable across operations and providers regardless of which model was used. |
+| `cache-hit-ratio` | Cache read tokens as a percentage of total input traffic (`n/a` when no cache tokens present). Tracks prompt-caching efficiency. |
+
+Token usage is also written to `$RUNNER_TEMP/aptu-token-usage.jsonl` and uploaded as a workflow artifact (`aptu-token-usage-<run-id>`), and summarized in `$GITHUB_STEP_SUMMARY` with columns for ETU and Cache%.
+
+## Permissions
+
+| Permission | Required For |
+|------------|--------------|
+| `issues: write` | Issue triage (comments, labels) |
+| `pull-requests: write` | PR labeling and review (comments, labels) |
+| `contents: read` | Repository context (all features) |
+| `attestations: read` | SLSA binary verification (`gh attestation verify`) |
+
+## Observability
+
+Two environment variables control optional output files written during PR review:
+
+| Variable | Description |
+|----------|-------------|
+| `APTU_CONTEXT_FILE` | Path to write a per-review context JSONL. Each record contains `pr_url`, `repo`, `total_chars`, `budget_drops`, `files_truncated`, `truncated_chars_dropped`, and `prompt_chars_final`. Useful for debugging which enrichments were dropped. When set via the Action, the context budget (files reviewed/truncated, chars dropped, budget %) is appended to `$GITHUB_STEP_SUMMARY`. |
+| `APTU_METRICS_FILE` | Path to write per-review token usage JSONL. Each record includes `effective_token_units` alongside raw token counts. |
+
+When running via the GitHub Action, both files are set automatically and uploaded as workflow artifacts (`aptu-review-context.jsonl` and `aptu-token-usage.jsonl`).
+
+## Scheduled Batch Triage
+
+Triage all unlabeled issues on a schedule:
+
+```yaml
+name: Aptu scheduled triage
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'   # every Monday at 08:00 UTC
+
+jobs:
+  triage:
+    runs-on: ubuntu-24.04-arm  # arm64 runner; ~50% cheaper; aptu ships native arm64 binary
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Get last week's date
+        id: date
+        run: echo "since=$(date -d '7 days ago' +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - uses: clouatre-labs/aptu@v0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          since: ${{ steps.date.outputs.since }}
+          issue-state: open
+```
+
+## PR Review with AST Context
+
+Pass the checked-out repository path to inject function signatures and call-graph context into the review prompt:
+
+```yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: clouatre-labs/aptu@v0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          repo-path: ${{ github.workspace }}
+          deep: 'true'
+```
+
+## Cross-Repo PR Review
+
+Trigger Aptu from another repository using `repository_dispatch`. This lets a central workflow review PRs across multiple repositories without installing the action in each one.
+
+**Receiver workflow** (in the repo where Aptu is installed):
+
+```yaml
+name: Aptu cross-repo
+
+on:
+  repository_dispatch:
+    types: [pr-review]
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: clouatre-labs/aptu@v0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          repo: ${{ github.event.client_payload.repo }}
+          pull-number: ${{ github.event.client_payload.pull_number }}
+```
+
+**Sender workflow** (in the repository whose PRs you want reviewed):
+
+```yaml
+name: Request Aptu review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch to Aptu repo
+        run: |
+          gh api repos/your-org/aptu-host/dispatches \
+            -f event_type=pr-review \
+            -f "client_payload[repo]=${{ github.repository }}" \
+            -f "client_payload[pull_number]=${{ github.event.pull_request.number }}"
+        env:
+          GH_TOKEN: ${{ secrets.APTU_DISPATCH_TOKEN }}
+```
+
+The `APTU_DISPATCH_TOKEN` secret must have `repo` scope on the Aptu host repository to send the dispatch event. The `github-token` in the receiver workflow needs `pull-requests: write` on the target repository; use a PAT or GitHub App token if the target is a different organization.
+
+## Security Scanning
+
+Run `aptu scan-security` on push or PR by setting `scan-path`:
+
+```yaml
+      - uses: clouatre-labs/aptu@v0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          scan-path: ${{ github.workspace }}
+```
+
+To scan only changed files, pass a diff file via `scan-security-diff` instead:
+
+```yaml
+      - name: Generate diff
+        run: git diff origin/main...HEAD > /tmp/changes.diff
+
+      - uses: clouatre-labs/aptu@v0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          scan-security-diff: /tmp/changes.diff
+```
+
+The scan step outputs SARIF and is non-blocking. See [docs/SECURITY_SCANNING.md](SECURITY_SCANNING.md) for the canonical `scan.yml` workflow and CI self-audit gate pattern.

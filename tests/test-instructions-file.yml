@@ -1,4 +1,4 @@
-name: Test API keys input coverage
+name: Test instructions-file input coverage
 on:
   workflow_dispatch:
 jobs:
@@ -7,17 +7,16 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Create a dummy instructions file
+        run: |
+          mkdir -p /tmp/aptu-test
+          echo "# PR Review Instructions\nReview for correctness and security." > /tmp/aptu-test/pr-review.md
+
       - id: action
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'sk-ant-test-placeholder'
-          cerebras-api-key: 'csk-test-placeholder'
-          gemini-api-key: 'AIza-test-placeholder'
-          groq-api-key: 'gsk_test-placeholder'
-          openrouter-api-key: 'sk-or-test-placeholder'
-          zai-api-key: 'zai-test-placeholder'
-          zenmux-api-key: 'zmx-test-placeholder'
+          instructions-file: '/tmp/aptu-test/pr-review.md'
           dry-run: 'true'
           skip-labeled: 'false'
           pr-queue: 'false'
@@ -41,10 +40,4 @@ jobs:
             exit 1
           fi
 
-          # cache-hit-ratio should be n/a when no tokens were consumed
-          if [ "$CACHE_HIT_RATIO" != "n/a" ] && [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: cache-hit-ratio should be n/a or a percentage, got: '$CACHE_HIT_RATIO'"
-            exit 1
-          fi
-
-          echo "PASS: all API key inputs accepted and metrics outputs present"
+          echo "PASS: instructions-file input accepted and metrics outputs present"

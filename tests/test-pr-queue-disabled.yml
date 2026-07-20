@@ -1,4 +1,4 @@
-name: Test fallback AI config writing
+name: Test pr-queue disabled (default)
 on:
   workflow_dispatch:
 jobs:
@@ -81,46 +81,47 @@ jobs:
           no-comment: 'true'
           apply-labels: 'false'
           skip-labeled: 'false'
-          fallback-provider: 'openrouter'
-          fallback-model: 'inception/mercury-2'
+          # pr-queue defaults to 'false' — the pr queue step should not run
+          pr-queue: 'false'
 
-      - name: Assert fallback config file was written
+      - name: Assert aptu binary is available in PATH after action
         run: |
-          CONFIG_FILE="$HOME/.config/aptu/config.toml"
-          echo "Checking for config file at: $CONFIG_FILE"
-          if [ ! -f "$CONFIG_FILE" ]; then
-            echo "FAIL: fallback config file not found at $CONFIG_FILE"
+          echo "Checking aptu binary availability..."
+          if ! command -v aptu > /dev/null 2>&1; then
+            echo "FAIL: aptu binary not found in PATH after action ran"
             exit 1
           fi
-          echo "Config file contents:"
-          cat "$CONFIG_FILE"
-          echo ""
-          # Verify it contains the expected fallback provider
-          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain 'openrouter'"
-            exit 1
-          fi
-          # Verify it contains the expected fallback model
-          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain 'inception/mercury-2'"
-            exit 1
-          fi
-          # Verify it has the [ai.fallback] section
-          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain [ai.fallback] section"
-            exit 1
-          fi
-          echo "PASS: fallback config file written correctly"
+          APTU_PATH=$(command -v aptu)
+          echo "PASS: aptu found at $APTU_PATH"
 
-      - name: Assert metrics outputs are present
+      - name: Assert aptu binary is executable
+        run: |
+          APTU_PATH=$(command -v aptu)
+          if [ ! -x "$APTU_PATH" ]; then
+            echo "FAIL: aptu binary at $APTU_PATH is not executable"
+            exit 1
+          fi
+          echo "PASS: aptu binary is executable"
+
+      - name: Assert metrics outputs are zero (no AI calls under workflow_dispatch)
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
           CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
           echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-          if ! echo "$INPUT_TOKENS" | grep -qE '^[0-9]+$'; then
-            echo "FAIL: input-tokens not numeric: $INPUT_TOKENS"
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got: $INPUT_TOKENS"
             exit 1
           fi
-          echo "PASS"
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got: $OUTPUT_TOKENS"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got: $CACHE_HIT_RATIO"
+            exit 1
+          fi
+          echo "PASS: metrics are zero/n/a as expected"

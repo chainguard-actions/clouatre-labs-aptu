@@ -1,4 +1,4 @@
-name: Test fallback AI config writing
+name: Test basic metrics outputs
 on:
   workflow_dispatch:
 jobs:
@@ -15,6 +15,7 @@ jobs:
           REAL_GH=$(which gh 2>/dev/null || echo "/usr/bin/gh")
           echo "$REAL_GH" > /tmp/real-gh-path
 
+          # Determine architecture
           ARCH_RAW=$(uname -m)
           case "$ARCH_RAW" in
             aarch64|arm64) ARCH="aarch64" ;;
@@ -26,15 +27,21 @@ jobs:
           ARCHIVE="aptu-cli-${FAKE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
           SHA256_FILE="aptu-cli-${FAKE_VERSION}-${ARCH}-unknown-linux-musl.sha256"
 
+          # Pre-create fake release files
           mkdir -p /tmp/fake-release
 
+          # Create a minimal fake aptu binary
           printf '#!/bin/sh\necho "fake aptu: $*"\nexit 0\n' > /tmp/fake-release/aptu
           chmod +x /tmp/fake-release/aptu
 
+          # Create the tar.gz archive containing the fake aptu binary
           tar -czf "/tmp/fake-release/${ARCHIVE}" -C /tmp/fake-release aptu
+
+          # Create matching sha256 file (format: hash  filename)
           SHA256=$(sha256sum "/tmp/fake-release/${ARCHIVE}" | awk '{print $1}')
           printf '%s  %s\n' "$SHA256" "$ARCHIVE" > "/tmp/fake-release/${SHA256_FILE}"
 
+          # Write the fake gh wrapper
           cat > /tmp/fake-gh << 'GH_EOF'
           #!/bin/sh
           ARGS="$*"
@@ -44,10 +51,12 @@ jobs:
               exit 0
               ;;
             *"repos/clouatre-labs/aptu/releases"*)
+              # Return the fake version tag; action pipes through: sed 's/^v//'
               echo "v0.99.99"
               exit 0
               ;;
             *"release download"*)
+              # Parse -D flag for destination directory
               DEST=""
               prev=""
               for arg in "$@"; do
@@ -69,6 +78,7 @@ jobs:
           GH_EOF
           chmod +x /tmp/fake-gh
 
+          # Put fake gh at front of PATH
           mkdir -p /tmp/fake-bin
           ln -sf /tmp/fake-gh /tmp/fake-bin/gh
           echo "/tmp/fake-bin" >> "$GITHUB_PATH"
@@ -81,46 +91,58 @@ jobs:
           no-comment: 'true'
           apply-labels: 'false'
           skip-labeled: 'false'
-          fallback-provider: 'openrouter'
-          fallback-model: 'inception/mercury-2'
 
-      - name: Assert fallback config file was written
-        run: |
-          CONFIG_FILE="$HOME/.config/aptu/config.toml"
-          echo "Checking for config file at: $CONFIG_FILE"
-          if [ ! -f "$CONFIG_FILE" ]; then
-            echo "FAIL: fallback config file not found at $CONFIG_FILE"
-            exit 1
-          fi
-          echo "Config file contents:"
-          cat "$CONFIG_FILE"
-          echo ""
-          # Verify it contains the expected fallback provider
-          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain 'openrouter'"
-            exit 1
-          fi
-          # Verify it contains the expected fallback model
-          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain 'inception/mercury-2'"
-            exit 1
-          fi
-          # Verify it has the [ai.fallback] section
-          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain [ai.fallback] section"
-            exit 1
-          fi
-          echo "PASS: fallback config file written correctly"
-
-      - name: Assert metrics outputs are present
+      - name: Assert input-tokens output is numeric
         env:
-          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
-          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
         run: |
-          echo "input-tokens: $INPUT_TOKENS"
-          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-          if ! echo "$INPUT_TOKENS" | grep -qE '^[0-9]+$'; then
-            echo "FAIL: input-tokens not numeric: $INPUT_TOKENS"
+          echo "actual input-tokens: $ACTUAL"
+          if ! echo "$ACTUAL" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: expected numeric input-tokens, got: $ACTUAL"
             exit 1
           fi
-          echo "PASS"
+          echo "PASS: input-tokens=$ACTUAL"
+
+      - name: Assert output-tokens output is numeric
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "actual output-tokens: $ACTUAL"
+          if ! echo "$ACTUAL" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: expected numeric output-tokens, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: output-tokens=$ACTUAL"
+
+      - name: Assert duration-ms output is numeric
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "actual duration-ms: $ACTUAL"
+          if ! echo "$ACTUAL" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: expected numeric duration-ms, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: duration-ms=$ACTUAL"
+
+      - name: Assert cache-hit-ratio is n/a when no AI calls made
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "actual cache-hit-ratio: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected 'n/a' for cache-hit-ratio when no AI calls made, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: cache-hit-ratio=n/a"
+
+      - name: Assert effective-token-units is numeric
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "actual effective-token-units: $ACTUAL"
+          if ! echo "$ACTUAL" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: expected numeric effective-token-units, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: effective-token-units=$ACTUAL"

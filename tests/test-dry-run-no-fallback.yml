@@ -1,4 +1,4 @@
-name: Test fallback AI config writing
+name: Test dry-run mode with no fallback provider
 on:
   workflow_dispatch:
 jobs:
@@ -81,46 +81,54 @@ jobs:
           no-comment: 'true'
           apply-labels: 'false'
           skip-labeled: 'false'
-          fallback-provider: 'openrouter'
-          fallback-model: 'inception/mercury-2'
+          # Disable fallback by setting empty string
+          fallback-provider: ''
+          fallback-model: ''
 
-      - name: Assert fallback config file was written
+      - name: Assert no fallback config file was written
         run: |
           CONFIG_FILE="$HOME/.config/aptu/config.toml"
-          echo "Checking for config file at: $CONFIG_FILE"
-          if [ ! -f "$CONFIG_FILE" ]; then
-            echo "FAIL: fallback config file not found at $CONFIG_FILE"
+          echo "Checking that config file was NOT written at: $CONFIG_FILE"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "Config file contents:"
+            cat "$CONFIG_FILE"
+            echo "FAIL: fallback config file should not exist when fallback-provider is empty"
             exit 1
           fi
-          echo "Config file contents:"
-          cat "$CONFIG_FILE"
-          echo ""
-          # Verify it contains the expected fallback provider
-          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain 'openrouter'"
-            exit 1
-          fi
-          # Verify it contains the expected fallback model
-          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain 'inception/mercury-2'"
-            exit 1
-          fi
-          # Verify it has the [ai.fallback] section
-          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain [ai.fallback] section"
-            exit 1
-          fi
-          echo "PASS: fallback config file written correctly"
+          echo "PASS: no fallback config file written (as expected)"
 
-      - name: Assert metrics outputs are present
+      - name: Assert zero token metrics when no AI calls made
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          EFFECTIVE_TOKEN_UNITS: ${{ steps.action.outputs.effective-token-units }}
           CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
           echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "effective-token-units: $EFFECTIVE_TOKEN_UNITS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-          if ! echo "$INPUT_TOKENS" | grep -qE '^[0-9]+$'; then
-            echo "FAIL: input-tokens not numeric: $INPUT_TOKENS"
+          # Under workflow_dispatch, no AI steps fire, so all token counts should be 0
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got: $INPUT_TOKENS"
             exit 1
           fi
-          echo "PASS"
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got: $OUTPUT_TOKENS"
+            exit 1
+          fi
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got: $DURATION_MS"
+            exit 1
+          fi
+          if [ "$EFFECTIVE_TOKEN_UNITS" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got: $EFFECTIVE_TOKEN_UNITS"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got: $CACHE_HIT_RATIO"
+            exit 1
+          fi
+          echo "PASS: all token metrics are zero/n/a as expected for workflow_dispatch with no AI calls"

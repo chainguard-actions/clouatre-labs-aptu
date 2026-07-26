@@ -1,0 +1,90 @@
+name: Test basic metrics outputs (no AI calls)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up mock gh CLI and fake aptu binary
+        run: |
+          set -euo pipefail
+          APTU_VERSION="0.99.0"
+          ARCH="x86_64"
+          ARCHIVE="aptu-cli-${APTU_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+
+          # Build fake aptu tarball that the mock gh will serve
+          mkdir -p /tmp/aptu-mock/pkg
+          cp "$GITHUB_WORKSPACE/tests/fixtures/fake-aptu.sh" /tmp/aptu-mock/pkg/aptu
+          chmod +x /tmp/aptu-mock/pkg/aptu
+          tar -czf "/tmp/aptu-mock/${ARCHIVE}" -C /tmp/aptu-mock/pkg aptu
+          cd /tmp/aptu-mock
+          sha256sum "${ARCHIVE}" > "${ARCHIVE%.tar.gz}.sha256"
+
+          # Install mock gh so it intercepts all gh calls from the action
+          cp "$GITHUB_WORKSPACE/tests/fixtures/mock-gh.sh" /usr/local/bin/gh
+          chmod +x /usr/local/bin/gh
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          # No AI provider keys — no AI calls will be made
+          # workflow_dispatch event: no issue/PR/schedule steps fire
+          dry-run: 'true'
+
+      - name: Assert input-tokens output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "input-tokens: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          echo "PASS: input-tokens=$ACTUAL"
+
+      - name: Assert output-tokens output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "output-tokens: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: output-tokens output is empty"
+            exit 1
+          fi
+          echo "PASS: output-tokens=$ACTUAL"
+
+      - name: Assert duration-ms output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "duration-ms: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: duration-ms output is empty"
+            exit 1
+          fi
+          echo "PASS: duration-ms=$ACTUAL"
+
+      - name: Assert cache-hit-ratio is n/a (no AI calls made)
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "cache-hit-ratio: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio='n/a' but got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS: cache-hit-ratio=n/a"
+
+      - name: Assert effective-token-units output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "effective-token-units: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: effective-token-units output is empty"
+            exit 1
+          fi
+          echo "PASS: effective-token-units=$ACTUAL"

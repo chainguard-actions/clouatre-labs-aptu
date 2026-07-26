@@ -1,0 +1,59 @@
+name: Test skip-labeled=false (no skip when issue has no labels)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up mock gh CLI and fake aptu binary
+        run: |
+          set -euo pipefail
+          APTU_VERSION="0.99.0"
+          ARCH="x86_64"
+          ARCHIVE="aptu-cli-${APTU_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+
+          # Build fake aptu tarball that the mock gh will serve
+          mkdir -p /tmp/aptu-mock/pkg
+          cp "$GITHUB_WORKSPACE/tests/fixtures/fake-aptu.sh" /tmp/aptu-mock/pkg/aptu
+          chmod +x /tmp/aptu-mock/pkg/aptu
+          tar -czf "/tmp/aptu-mock/${ARCHIVE}" -C /tmp/aptu-mock/pkg aptu
+          cd /tmp/aptu-mock
+          sha256sum "${ARCHIVE}" > "${ARCHIVE%.tar.gz}.sha256"
+
+          # Install mock gh so it intercepts all gh calls from the action
+          cp "$GITHUB_WORKSPACE/tests/fixtures/mock-gh.sh" /usr/local/bin/gh
+          chmod +x /usr/local/bin/gh
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          # skip-labeled=true but no issue labels in workflow_dispatch context
+          # so skip should be false and action should proceed normally
+          skip-labeled: 'true'
+          dry-run: 'true'
+
+      - name: Assert action completed and emits metrics
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          # Both outputs must be present (action ran to completion)
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output missing — action did not complete"
+            exit 1
+          fi
+          if [ -z "$CACHE_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output missing — action did not complete"
+            exit 1
+          fi
+          # No AI calls were made, so cache-hit-ratio should be n/a
+          if [ "$CACHE_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio='n/a' but got '$CACHE_RATIO'"
+            exit 1
+          fi
+          echo "PASS"

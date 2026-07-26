@@ -1,0 +1,77 @@
+name: Test fallback AI config is written
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up mock gh CLI and fake aptu binary
+        run: |
+          set -euo pipefail
+          APTU_VERSION="0.99.0"
+          ARCH="x86_64"
+          ARCHIVE="aptu-cli-${APTU_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+
+          # Build fake aptu tarball that the mock gh will serve
+          mkdir -p /tmp/aptu-mock/pkg
+          cp "$GITHUB_WORKSPACE/tests/fixtures/fake-aptu.sh" /tmp/aptu-mock/pkg/aptu
+          chmod +x /tmp/aptu-mock/pkg/aptu
+          tar -czf "/tmp/aptu-mock/${ARCHIVE}" -C /tmp/aptu-mock/pkg aptu
+          cd /tmp/aptu-mock
+          sha256sum "${ARCHIVE}" > "${ARCHIVE%.tar.gz}.sha256"
+
+          # Install mock gh so it intercepts all gh calls from the action
+          cp "$GITHUB_WORKSPACE/tests/fixtures/mock-gh.sh" /usr/local/bin/gh
+          chmod +x /usr/local/bin/gh
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+          skip-labeled: 'false'
+
+      - name: Assert fallback config file was written
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking for config at: $CONFIG"
+          if [ ! -f "$CONFIG" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG"
+            exit 1
+          fi
+          echo "Config contents:"
+          cat "$CONFIG"
+          # Verify it contains the fallback provider
+          if ! grep -q 'openrouter' "$CONFIG"; then
+            echo "FAIL: config does not contain 'openrouter'"
+            exit 1
+          fi
+          # Verify it contains the fallback model
+          if ! grep -q 'inception/mercury-2' "$CONFIG"; then
+            echo "FAIL: config does not contain 'inception/mercury-2'"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          for var in "$INPUT_TOKENS" "$OUTPUT_TOKENS" "$DURATION_MS" "$CACHE_RATIO"; do
+            if [ -z "$var" ]; then
+              echo "FAIL: one or more metrics outputs are empty"
+              exit 1
+            fi
+          done
+          echo "PASS: all metrics outputs present"

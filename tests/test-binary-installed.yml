@@ -1,0 +1,110 @@
+name: Test aptu binary installation and PATH setup
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install mock gh binary
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+
+          # Write fake gh binary that intercepts the calls the action makes
+          cat > "$HOME/.local/bin/gh" << 'GHEOF'
+          #!/bin/sh
+          case "$*" in
+            *"repos/clouatre-labs/aptu/releases"*)
+              echo "0.10.6"
+              exit 0
+              ;;
+            *"release download"*)
+              DIR=""
+              prev=""
+              for arg in "$@"; do
+                if [ "$prev" = "-D" ]; then DIR="$arg"; fi
+                prev="$arg"
+              done
+              if [ -z "$DIR" ]; then
+                echo "gh mock: missing -D argument" >&2; exit 1
+              fi
+              case "$(uname -m)" in
+                aarch64|arm64) ARCH="aarch64" ;;
+                *) ARCH="x86_64" ;;
+              esac
+              ARCHIVE="aptu-cli-0.10.6-${ARCH}-unknown-linux-musl.tar.gz"
+              SHA_FILE="aptu-cli-0.10.6-${ARCH}-unknown-linux-musl.sha256"
+              FAKE_DIR=$(mktemp -d)
+              printf '#!/bin/sh\necho "fake aptu $*"\nexit 0\n' > "$FAKE_DIR/aptu"
+              chmod +x "$FAKE_DIR/aptu"
+              tar -czf "$DIR/$ARCHIVE" -C "$FAKE_DIR" aptu
+              rm -rf "$FAKE_DIR"
+              (cd "$DIR" && sha256sum "$ARCHIVE" > "$SHA_FILE")
+              exit 0
+              ;;
+            *"attestation verify"*)
+              echo "Attestation verified (mock)"
+              exit 0
+              ;;
+            *)
+              if [ -x /usr/bin/gh ]; then exec /usr/bin/gh "$@"; fi
+              echo "gh mock: unhandled: $*" >&2; exit 1
+              ;;
+          esac
+          GHEOF
+          chmod +x "$HOME/.local/bin/gh"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+
+      - name: Assert aptu binary is on PATH
+        run: |
+          echo "Checking aptu binary..."
+          if ! command -v aptu > /dev/null 2>&1; then
+            echo "FAIL: aptu binary not found on PATH"
+            echo "PATH=$PATH"
+            ls -la "$HOME/.local/bin/" 2>/dev/null || echo "(~/.local/bin not found)"
+            exit 1
+          fi
+          echo "aptu found at: $(command -v aptu)"
+          echo "PASS"
+
+      - name: Assert aptu binary is executable and shows version
+        run: |
+          echo "Running: aptu --version"
+          if ! aptu --version; then
+            echo "FAIL: aptu --version failed"
+            exit 1
+          fi
+          echo "PASS: aptu --version succeeded"
+
+      - name: Assert metrics outputs are zero (no AI calls)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          EFFECTIVE_UNITS: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "effective-token-units: $EFFECTIVE_UNITS"
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$EFFECTIVE_UNITS" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got '$EFFECTIVE_UNITS'"
+            exit 1
+          fi
+          echo "PASS"

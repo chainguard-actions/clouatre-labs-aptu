@@ -1,0 +1,100 @@
+# Aptu - Rust CLI [Production]
+
+AI-powered OSS issue triage and PR review with contribution history tracking.
+
+Smart defaults (TTY, rate limits, permissions); `--output json` for automation (schema is a contract); KISS; clean refactors over deprecation.
+
+## Stack
+
+Rust 2024 + Tokio + Clap (derive) + Octocrab + multi-provider AI (OpenAI-compatible interface; see `aptu-core::ai::registry`)
+
+## Workspace Crates
+
+- `aptu-cli` - CLI interface (Clap derive); binary: `aptu`
+- `aptu-core` - Core library: AI providers, GitHub API, security scanner, triage engine, cache, history, retry, bulk processing
+  - `facade/` - High-level CLI/FFI entry points (ai_client, issues, models, pr_create, pr_review, repos, revert)
+
+## CLI Subcommands
+
+- `auth` (login/logout/status)
+- `repo` (list/discover/add/remove)
+- `issue` (list/triage/create/revert)
+- `pr` (review/label/create/queue/revert)
+- `scan-security` (local pattern scan; no AI)
+- `models` (list)
+- `completion` (generate/install)
+- `history`
+
+### Key flags
+
+- `issue triage`: `--since <date>`, `--repo`, `--state`, `--dry-run`, `--no-apply`, `--no-comment`, `--force`
+- `issue list` / `issue create`: `--repo`/`-r` (preferred over positional; positional still accepted with deprecation notice)
+- `pr review`: `--comment`, `--approve`, `--request-changes`, `--dry-run`, `--force`; at least one action flag required or a hint is emitted
+- `scan-security`: `--output sarif|github-annotations|json|text`, `--fail-on <severities>`, `--exclude <prefix>`; `sarif`/`github-annotations` formats are only valid for this subcommand
+- Global: `--output json|text`, `--verbose`, `--no-color`
+
+## Config & Data Paths (XDG)
+
+- `~/.config/aptu/config.toml` - provider, model, defaults, and `[prompt]` section (byte limits for issues, diffs, and commits)
+- `~/.config/aptu/repos.toml` - curated repo list
+- `~/.local/share/aptu/history.json` - contribution history
+
+## Environment Variables
+
+Each AI provider requires a `<PROVIDER>_API_KEY` env var (see `aptu-core::ai::registry` for the full list).
+
+GitHub auth uses OAuth device flow (keyring-backed); no `GITHUB_TOKEN` env var required for interactive use.
+
+## Commands
+
+```
+cargo build
+cargo test
+cargo clippy -- -D warnings
+cargo fmt --check
+cargo deny check advisories licenses
+cargo install --path crates/aptu-cli --profile release   # aptu binary
+```
+
+Both binaries install to `~/.cargo/bin/`. Do not install via Homebrew; build from source.
+
+Cargo profiles defined in workspace `Cargo.toml`: `release` (size-optimized, LTO, strip) and `ci` (inherits release, faster compile).
+
+## Project-Specific Patterns
+
+### AI & Transport
+- All providers share an OpenAI-compatible interface (`aptu-core::ai`); registry in `aptu-core::ai::registry`; circuit breaker in `aptu-core::ai::circuit_breaker`
+- `AiProvider` trait (in `ai/provider/mod.rs`) exposes `config()` returning `&ProviderConfig`; operation-specific logic split across `provider/{triage,review,label,create,http,parse}.rs`
+- User-prompt builders (`build_user_prompt`, `build_pr_review_user_prompt`, etc.) live in `ai/prompts/mod.rs` -- shared by provider and `tests/prompt_lint.rs`; do not inline them in provider files
+- Exponential backoff retry with `is_retryable_*` helpers in `aptu-core::retry`
+- Rate limit awareness and response caching (`aptu-core::cache`)
+- Bulk processing via `aptu-core::process_bulk` (concurrent triage/review with progress callbacks)
+
+### Security
+- `aptu scan-security <path>` walks a directory with local pattern matching; no AI call; each `PatternDefinition` carries `remediation` text and `authority_url` (CWE or OWASP reference)
+- SARIF output (`--output sarif`) populates `tool.driver.rules[]` with CWE `helpUri`; upload via `scan.yml` workflow; see `docs/SECURITY_SCANNING.md`
+- CI self-audit gate: `scan-self` job in `ci.yml` runs `--fail-on critical,high --output github-annotations` on every push/PR
+- scan-security: scanning is performed locally, and no code is sent to external services.
+- Prompt-injection input limits in `[prompt]` (`PromptConfig`: `max_issue_body_bytes=32768`, `max_diff_bytes=131072`, `max_commit_message_bytes=4096`); CLI exits non-zero on breach
+
+### GitHub Integration
+- Inline PR review comments posted via GitHub REST API (`aptu-core::github::pulls::post_pr_review`)
+- PR review injects AST + call-graph context from GitHub Contents API; multi-language (Rust, Go, Python, TS, JS, C/C++, C#, Java)
+- Review context budgets in `[review]` (`ReviewConfig`: `max_prompt_chars`, `max_full_content_files`, `max_chars_per_file`, `max_diff_chars` (200k), `max_patch_chars_per_file` (10k)); patches exceeding `max_patch_chars_per_file` are dropped entirely; `validate_consistency()` emits warnings for misconfigured `min_budget_for_call_graph`
+- GitHub OAuth device flow; credentials stored in OS keyring
+
+### Prompts & Schemas
+- All prompt text in `crates/aptu-core/src/ai/prompts/` as `.md`/`.json`; edit there, not in Rust source
+- System prompt capped at 5,000 chars; JSON schema injected in the user turn, not the system turn
+- Complexity assessment in every triage response (`ComplexityLevel` + `ComplexityAssessment` in `aptu-core::ai::types`)
+
+### WASM Portability
+- `aptu-core` compiles to `wasm32-unknown-unknown` (no default features); OS-dependent code (`keyring`, `process::Command`, `tokio`, `backon`) is `#[cfg(not(target_arch = "wasm32"))]`-gated
+- Facade functions that require OS I/O carry the same gate; `wasm_unsupported!` macro in `facade/mod.rs` provides stub bodies
+- CI job `wasm-check`: `cargo check -p aptu-core --target wasm32-unknown-unknown --no-default-features`; gate all new OS-only code the same way
+
+### Conventions
+- Apache-2.0, REUSE-compliant; SPDX headers on every source file
+- cargo-deny for dependency audits (`advisories` + `licenses`)
+- Contribution history tracking with progress metrics (`aptu-core::history`)
+- PR merge: `gh pr merge --squash` (no merge queue)

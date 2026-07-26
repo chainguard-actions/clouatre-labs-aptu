@@ -1,0 +1,129 @@
+name: Test basic dry-run (no AI event)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install mock gh and aptu binaries
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+
+          # Write fake aptu binary
+          printf '#!/bin/sh\necho "fake aptu $*"\nexit 0\n' > "$HOME/.local/bin/aptu"
+          chmod +x "$HOME/.local/bin/aptu"
+
+          # Write fake gh binary that handles the calls the action makes:
+          #   gh api repos/clouatre-labs/aptu/releases --jq '...'
+          #   gh release download v0.10.6 -R clouatre-labs/aptu --pattern ... -D <dir>
+          #   gh attestation verify <file> -R clouatre-labs/aptu
+          cat > "$HOME/.local/bin/gh" << 'GHEOF'
+          #!/bin/sh
+          case "$*" in
+            *"repos/clouatre-labs/aptu/releases"*)
+              echo "0.10.6"
+              exit 0
+              ;;
+            *"release download"*)
+              DIR=""
+              prev=""
+              for arg in "$@"; do
+                if [ "$prev" = "-D" ]; then DIR="$arg"; fi
+                prev="$arg"
+              done
+              if [ -z "$DIR" ]; then
+                echo "gh mock: missing -D argument" >&2; exit 1
+              fi
+              case "$(uname -m)" in
+                aarch64|arm64) ARCH="aarch64" ;;
+                *) ARCH="x86_64" ;;
+              esac
+              ARCHIVE="aptu-cli-0.10.6-${ARCH}-unknown-linux-musl.tar.gz"
+              SHA_FILE="aptu-cli-0.10.6-${ARCH}-unknown-linux-musl.sha256"
+              FAKE_DIR=$(mktemp -d)
+              printf '#!/bin/sh\necho "fake aptu $*"\nexit 0\n' > "$FAKE_DIR/aptu"
+              chmod +x "$FAKE_DIR/aptu"
+              tar -czf "$DIR/$ARCHIVE" -C "$FAKE_DIR" aptu
+              rm -rf "$FAKE_DIR"
+              (cd "$DIR" && sha256sum "$ARCHIVE" > "$SHA_FILE")
+              exit 0
+              ;;
+            *"attestation verify"*)
+              echo "Attestation verified (mock)"
+              exit 0
+              ;;
+            *)
+              if [ -x /usr/bin/gh ]; then exec /usr/bin/gh "$@"; fi
+              echo "gh mock: unhandled: $*" >&2; exit 1
+              ;;
+          esac
+          GHEOF
+          chmod +x "$HOME/.local/bin/gh"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+          skip-labeled: 'false'
+
+      - name: Assert input-tokens output is zero
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "actual input-tokens: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert output-tokens output is zero
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "actual output-tokens: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert duration-ms output is zero
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "actual duration-ms: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert cache-hit-ratio is n/a
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "actual cache-hit-ratio: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert effective-token-units is zero
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "actual effective-token-units: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"

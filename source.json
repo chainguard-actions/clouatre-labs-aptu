@@ -1,6 +1,11 @@
 {
   "owner": "clouatre-labs",
   "repo": "aptu",
-  "version": "",
-  "url": "https://github.com/clouatre-labs/aptu"
+  "version": "v0.10.7",
+  "commit_sha": "551d10da144d61668bd3357f8d47ca121c43b84c",
+  "url": "https://github.com/clouatre-labs/aptu",
+  "policy_sha": "d636be7e43ef829af6e853da6b3c7566db9f72fe",
+  "test_policy_sha": "843adf9e4b8f85d0c08b27b9d0b09dd094b54702",
+  "test_agent_version": "2",
+  "harden_agent_version": "2"
 }

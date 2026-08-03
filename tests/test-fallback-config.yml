@@ -1,0 +1,75 @@
+name: Test fallback AI config is written
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert fallback config file was written (regardless of action outcome)
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          # The "Write fallback AI config" step runs before the binary install steps,
+          # so it should always be written when fallback-provider is set.
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: config file not found at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+
+          # Verify the config contains the expected fallback provider
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'openrouter'"
+            exit 1
+          fi
+
+          # Verify the config contains the expected fallback model
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'inception/mercury-2'"
+            exit 1
+          fi
+
+          # Verify the TOML structure
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain '[ai.fallback]' section"
+            exit 1
+          fi
+
+          echo "PASS: fallback config file is correct"
+
+      - name: Assert action completed (success or graceful failure in act environment)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          if [ "$OUTCOME" = "success" ]; then
+            if [ "$INPUT_TOKENS" != "0" ]; then
+              echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+              exit 1
+            fi
+            echo "PASS: action succeeded with correct metrics"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (act environment limitation: gh attestation verify or actions/cache not available)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

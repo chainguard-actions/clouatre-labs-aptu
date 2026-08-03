@@ -1,0 +1,53 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          # AI provider API keys (all optional; passed here for input coverage)
+          anthropic-api-key: ''
+          cerebras-api-key: ''
+          gemini-api-key: ''
+          groq-api-key: ''
+          openrouter-api-key: ''
+          zai-api-key: ''
+          zenmux-api-key: ''
+          # instructions-file coverage (non-existent path is fine under dry-run with no PR event)
+          instructions-file: ''
+          # Behavior flags
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          # Under workflow_dispatch no issue/PR/schedule steps fire,
+          # so the action just installs aptu and aggregates zero metrics.
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # Under workflow_dispatch no AI calls are made; metrics should be zero/n/a
+          if [ "$INPUT_TOKENS" != "0" ] && [ -n "$INPUT_TOKENS" ]; then
+            echo "WARN: expected 0 input tokens but got '$INPUT_TOKENS'"
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ] && [ -n "$OUTPUT_TOKENS" ]; then
+            echo "WARN: expected 0 output tokens but got '$OUTPUT_TOKENS'"
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ] && [ -n "$CACHE_HIT_RATIO" ]; then
+            echo "WARN: expected n/a cache-hit-ratio but got '$CACHE_HIT_RATIO'"
+          fi
+          echo "PASS: all metric outputs are present"

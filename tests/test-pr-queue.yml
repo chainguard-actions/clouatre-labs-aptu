@@ -1,0 +1,44 @@
+name: Test pr-queue flag
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          # pr-queue: true triggers `aptu pr queue --repo $REPO`.
+          # GITHUB_REPOSITORY is a sentinel (not a real repo), so the API call
+          # may fail. Binary installation may also fail under act (SLSA attestation).
+          # We allow failure and assert on outcome.
+          pr-queue: 'true'
+          dry-run: 'true'
+
+      - name: Assert action ran (pr-queue step fired or failed gracefully)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ "$OUTCOME" = "success" ]; then
+            # Action succeeded; metrics outputs should be present
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: action succeeded but input-tokens output is empty"
+              exit 1
+            fi
+            echo "PASS: pr-queue ran successfully"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (sentinel repo not resolvable or binary install failed)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

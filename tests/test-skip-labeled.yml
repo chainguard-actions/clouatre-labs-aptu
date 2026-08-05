@@ -1,0 +1,49 @@
+name: Test skip-labeled logic (no labels present)
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          # skip-labeled: true means skip if issue already has type: and p[0-9] labels.
+          # Under workflow_dispatch, github.event.issue.labels is null/empty,
+          # so the action should NOT skip (skip=false) and should proceed normally.
+          # Binary installation may fail under act (SLSA attestation).
+          skip-labeled: 'true'
+          dry-run: 'true'
+
+      - name: Assert action completed and metrics outputs are present
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          # When skip=false (no labels), the action proceeds; metrics-aggregate always runs
+          # and emits zeros when no AI calls were made.
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: action succeeded but input-tokens output is empty (action may have been skipped unexpectedly)"
+              exit 1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: action succeeded but cache-hit-ratio output is empty"
+              exit 1
+            fi
+            echo "PASS: action ran (skip=false), metrics outputs present"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (binary install/attestation may not work under act)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

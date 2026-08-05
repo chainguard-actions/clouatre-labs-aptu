@@ -1,0 +1,70 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          # Set fallback provider/model to trigger the "Write fallback AI config" step.
+          # This step writes $HOME/.config/aptu/config.toml with the fallback chain.
+          # It runs BEFORE binary installation, so the file should exist even if
+          # the binary install step fails.
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+
+      - name: Assert fallback config was written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          # Verify it contains the expected fallback provider
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config file does not contain 'openrouter'"
+            exit 1
+          fi
+          # Verify it contains the expected fallback model
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config file does not contain 'inception/mercury-2'"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"
+
+      - name: Assert action outcome is acceptable
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: action succeeded but input-tokens output is empty"
+              exit 1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: action succeeded but cache-hit-ratio output is empty"
+              exit 1
+            fi
+            echo "PASS: metrics outputs present"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (binary install/attestation may not work under act)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

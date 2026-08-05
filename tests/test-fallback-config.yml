@@ -1,0 +1,62 @@
+name: Test fallback AI config is written
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The "Write fallback AI config" step runs before the binary install step,
+      # so the config file should be written even if the binary install fails.
+      # Use continue-on-error since gh attestation verify may fail in act.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+
+      - name: Assert fallback config file was written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: config.toml was not written to $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          # Verify it contains the fallback provider and model
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config.toml does not contain 'openrouter'"
+            exit 1
+          fi
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config.toml does not contain 'inception/mercury-2'"
+            exit 1
+          fi
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config.toml does not contain [ai.fallback] section"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"
+
+      - name: Assert metrics outputs are set after fallback config test
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          echo "PASS: metrics outputs set correctly"

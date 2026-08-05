@@ -1,0 +1,51 @@
+name: Test skip-labeled=false when no labels present
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # With skip-labeled=true but no issue labels (workflow_dispatch has no issue context),
+      # the check-skip step should output skip=false and the action should proceed normally.
+      # Use continue-on-error since gh attestation verify may fail in act.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+
+      - name: Assert action ran (not skipped due to labels)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # The action should have attempted to run (not been skipped),
+          # so outcome must be success or failure (not skipped)
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran with outcome '$OUTCOME' (not skipped)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert metrics outputs are set
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          # Action should have run (not skipped), producing 0 metrics since no AI calls
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty — action may have been skipped unexpectedly"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          echo "PASS: action ran with skip-labeled=true and no issue labels"

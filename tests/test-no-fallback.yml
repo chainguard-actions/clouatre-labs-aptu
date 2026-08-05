@@ -1,0 +1,65 @@
+name: Test action with no fallback provider
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # When fallback-provider is empty, the "Write fallback AI config" step is skipped.
+      # The action should still complete (or fail gracefully at binary install) with 0 metrics.
+      # Use continue-on-error since gh attestation verify may fail in act.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: ''
+          fallback-model: ''
+          dry-run: 'true'
+
+      - name: Assert no fallback config file was written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "FAIL: config.toml was unexpectedly written when fallback-provider is empty"
+            exit 1
+          fi
+          echo "PASS: no fallback config written (as expected)"
+
+      - name: Assert metrics outputs are set
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          echo "effective-token-units: $ETU"
+          # All outputs should be set (0 or n/a since no AI calls were made)
+          for VAR_NAME in INPUT_TOKENS OUTPUT_TOKENS DURATION_MS CACHE_HIT_RATIO ETU; do
+            eval VAL=\$$VAR_NAME
+            if [ -z "$VAL" ]; then
+              echo "FAIL: $VAR_NAME output is empty"
+              exit 1
+            fi
+          done
+          # Verify zero-value metrics
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0 but got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0 but got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a but got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS: all metrics outputs set correctly with no AI calls"

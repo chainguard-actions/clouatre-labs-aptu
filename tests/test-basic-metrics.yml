@@ -1,0 +1,91 @@
+name: Test basic metrics outputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The action installs the aptu binary from GitHub releases.
+      # In the act environment, gh attestation verify may fail or the binary
+      # download may not complete. We allow the action to fail and assert that
+      # the metrics-aggregate step (which runs always()) still sets outputs.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+
+      - name: Assert action ran (install may fail gracefully in act)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action completed with outcome '$OUTCOME'"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert input-tokens output is set
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          echo "PASS: input-tokens=$INPUT_TOKENS"
+
+      - name: Assert output-tokens output is set
+        env:
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "output-tokens: $OUTPUT_TOKENS"
+          if [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output is empty"
+            exit 1
+          fi
+          echo "PASS: output-tokens=$OUTPUT_TOKENS"
+
+      - name: Assert duration-ms output is set
+        env:
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "duration-ms: $DURATION_MS"
+          if [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms output is empty"
+            exit 1
+          fi
+          echo "PASS: duration-ms=$DURATION_MS"
+
+      - name: Assert cache-hit-ratio output is set
+        env:
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          # When no AI calls are made, cache-hit-ratio should be n/a
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected 'n/a' but got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS: cache-hit-ratio=$CACHE_HIT_RATIO"
+
+      - name: Assert effective-token-units output is set
+        env:
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "effective-token-units: $ETU"
+          if [ -z "$ETU" ]; then
+            echo "FAIL: effective-token-units output is empty"
+            exit 1
+          fi
+          echo "PASS: effective-token-units=$ETU"

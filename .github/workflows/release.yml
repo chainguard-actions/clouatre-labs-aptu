@@ -1,0 +1,379 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (skip publish, release creation, homebrew)'
+        required: true
+        type: boolean
+        default: true
+      version:
+        description: 'Version to simulate (e.g., 0.1.3)'
+        required: true
+        type: string
+      tag_name:
+        description: 'Existing tag to re-run release for (e.g. v0.8.5); overrides version derivation from GITHUB_REF. Use for asset recovery when a tag-push triggered run failed.'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+
+jobs:
+  verify-tag-signature:
+    name: Verify Tag Signature
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    if: github.event_name != 'workflow_dispatch'
+    outputs:
+      commit_sha: ${{ steps.resolve-commit.outputs.commit_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify tag is signed
+        id: resolve-commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Verifying signature for tag: $TAG"
+
+          # Fetch the ref once; extract type and object SHA from cached response
+          REF_JSON="$(gh api "repos/$REPOSITORY/git/refs/tags/$TAG")"
+          TAG_TYPE="$(jq -r '.object.type' <<< "$REF_JSON")"
+          TAG_SHA="$(jq -r '.object.sha' <<< "$REF_JSON")"
+
+          if [ "$TAG_TYPE" != "tag" ]; then
+            echo "ERROR: $TAG is a lightweight tag (type: $TAG_TYPE), not an annotated/signed tag"
+            exit 1
+          fi
+
+          # Fetch the tag object once; extract verified and reason from cached response
+          TAG_OBJ_JSON="$(gh api "repos/$REPOSITORY/git/tags/$TAG_SHA")"
+          VERIFIED="$(jq -r '.verification.verified' <<< "$TAG_OBJ_JSON")"
+          REASON="$(jq -r '.verification.reason' <<< "$TAG_OBJ_JSON")"
+
+          echo "Tag verification: verified=$VERIFIED, reason=$REASON"
+
+          if [ "$VERIFIED" != "true" ]; then
+            echo "ERROR: Tag $TAG signature is not valid (reason: $REASON)"
+            exit 1
+          fi
+
+          echo "Tag $TAG is signed and verified by GitHub"
+
+          # Resolve the commit SHA by dereferencing the annotated tag object.
+          COMMIT_SHA="$(jq -r '.object.sha' <<< "$TAG_OBJ_JSON")"
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+
+
+  create-release:
+    name: Create Release
+    needs: [verify-tag-signature]
+    if: always() && (needs.verify-tag-signature.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ env.VERSION }}
+      tag: ${{ env.TAG }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Extract version from tag or input
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_TAG_NAME" ]; then
+            TAG="$INPUT_TAG_NAME"
+            VERSION="${TAG#v}"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+            TAG="v$VERSION"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+          fi
+          safe_version=$(printf '%s' "$VERSION" | tr -d '\n\r')
+          safe_tag=$(printf '%s' "$TAG" | tr -d '\n\r')
+          echo "VERSION=$safe_version" >> "$GITHUB_ENV"
+          echo "TAG=$safe_tag" >> "$GITHUB_ENV"
+
+      - name: Validate version matches Cargo.toml
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          if [ "$VERSION" != "$CARGO_VERSION" ]; then
+            echo "Tag version $VERSION does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        if: ${{ env.DRY_RUN != 'true' }}
+        id: create_release
+        uses: taiki-e/create-gh-release-action@eba8ea96c86cca8a37f1b56e94b4d13301fba651 # v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Dry run - skip release creation
+        if: ${{ env.DRY_RUN == 'true' }}
+        run: echo "DRY RUN - Would create release for v$VERSION"
+
+  build-and-attest:
+    name: Build ${{ matrix.target }}
+    needs: create-release
+    if: always() && needs.create-release.result == 'success'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04
+            cross: true
+          - target: aarch64-apple-darwin
+            os: macos-15
+            cross: false
+    uses: ./.github/workflows/build-and-attest.yml
+    with:
+      target: ${{ matrix.target }}
+      os: ${{ matrix.os }}
+      cross: ${{ matrix.cross }}
+      version: ${{ needs.create-release.outputs.version }}
+      tag_name: ${{ needs.create-release.outputs.tag }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+
+  update-marketplace-tag:
+    name: Update Marketplace Floating Tag
+    needs: [create-release, verify-tag-signature]
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    steps:
+      - name: Move floating minor tag to current release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ needs.verify-tag-signature.outputs.commit_sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Derive floating minor tag: v0.3.1 -> v0.3, v1.0.0 -> v1.0
+
+          MINOR_TAG="${TAG%.*}"
+          if [[ ! "$MINOR_TAG" =~ ^v[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: derived floating tag '$MINOR_TAG' from '$TAG' is not a valid vX.Y tag; aborting"
+            exit 1
+          fi
+          echo "Moving floating tag $MINOR_TAG to $COMMIT_SHA (released as $TAG)"
+
+          # All gh api calls are explicitly scoped to $REPOSITORY.
+          # GET-first: probe whether the floating tag already exists (200) or not (404).
+          # POST-first is ambiguous: GitHub returns 422 "Reference update failed" on first-ever
+          # creation, indistinguishable from other POST failures, causing the PATCH fallback to
+          # fail with 404 when the ref truly does not exist yet.
+          # Note: a command in an if-condition does not trigger set -e on failure.
+          # The refs API does prefix matching, so GET refs/tags/v0.8 also returns refs/tags/v0.8.5,
+          # refs/tags/v0.8.6, etc. The response may be an array or a single object depending on how
+          # many refs match. We normalise to an array and filter for an exact ref match to avoid a
+          # false negative that sends us into the POST branch when the tag already exists.
+          EXISTING_REF=$(gh api "repos/$REPOSITORY/git/refs/tags/$MINOR_TAG" 2>/dev/null \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); items=d if isinstance(d,list) else [d]; print(next((x['ref'] for x in items if x['ref']=='refs/tags/$MINOR_TAG'),''))" \
+            || true)
+          if [[ "$EXISTING_REF" == "refs/tags/$MINOR_TAG" ]]; then
+            gh api \
+              --method PATCH \
+              "repos/$REPOSITORY/git/refs/tags/$MINOR_TAG" \
+              -f sha="$COMMIT_SHA" \
+              -F force=true
+            echo "Moved existing floating tag $MINOR_TAG"
+          else
+            gh api \
+              --method POST \
+              "repos/$REPOSITORY/git/refs" \
+              -f ref="refs/tags/$MINOR_TAG" \
+              -f sha="$COMMIT_SHA"
+            echo "Created new floating tag $MINOR_TAG"
+          fi
+
+          echo "$MINOR_TAG now points to $COMMIT_SHA ($TAG)"
+
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: build-and-attest
+    permissions:
+      contents: read
+    if: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout homebrew-tap repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: clouatre-labs/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Download SHA256 checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+
+          # Get release assets
+          ALL_ASSETS=$(gh api "repos/$REPOSITORY/releases/tags/${RELEASE_TAG}" --jq '.assets[]')
+          
+          # Download CLI tarballs (aptu-cli-*) and compute SHA256
+          echo "$ALL_ASSETS" | jq -r 'select(.name | startswith("aptu-cli-") and endswith(".tar.gz")) | .browser_download_url' | while read -r url; do
+            filename=$(basename "$url")
+            curl -sL "$url" -o "/tmp/$filename"
+            sha256=$(sha256sum "/tmp/$filename" | cut -d' ' -f1)
+            echo "$filename:$sha256" >> /tmp/checksums-cli.txt
+          done
+
+      - name: Update formula with SHA256 values
+        run: |
+          cd homebrew-tap
+          
+          # Read CLI checksums
+          declare -A shas
+          while IFS=':' read -r filename sha; do
+            shas["$filename"]="$sha"
+          done < /tmp/checksums-cli.txt
+          
+          # Update formula with if/elsif syntax
+          FORMULA="Formula/aptu.rb"
+          RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          VERSION_NUMBER="${RELEASE_TAG#v}"
+          
+          # Generate formula content with if/elsif for architecture detection
+          cat > "$FORMULA" << 'FORMULA_EOF'
+          class Aptu < Formula
+            desc "Gamified OSS issue triage with AI assistance"
+            homepage "https://github.com/clouatre-labs/aptu"
+            license "Apache-2.0"
+            
+            if OS.mac? && Hardware::CPU.arm?
+              url "https://github.com/clouatre-labs/aptu/releases/download/TAG_PLACEHOLDER/aptu-cli-VERSION_NUMBER_PLACEHOLDER-aarch64-apple-darwin.tar.gz"
+              sha256 "SHA256_MACOS_ARM_PLACEHOLDER"
+            elsif OS.linux? && Hardware::CPU.arm?
+              url "https://github.com/clouatre-labs/aptu/releases/download/TAG_PLACEHOLDER/aptu-cli-VERSION_NUMBER_PLACEHOLDER-aarch64-unknown-linux-musl.tar.gz"
+              sha256 "SHA256_LINUX_ARM_PLACEHOLDER"
+            elsif OS.linux? && Hardware::CPU.intel?
+              url "https://github.com/clouatre-labs/aptu/releases/download/TAG_PLACEHOLDER/aptu-cli-VERSION_NUMBER_PLACEHOLDER-x86_64-unknown-linux-musl.tar.gz"
+              sha256 "SHA256_LINUX_INTEL_PLACEHOLDER"
+            end
+            
+            def install
+              bin.install "aptu"
+            end
+            
+            test do
+              assert_match version.to_s, shell_output("#{bin}/aptu --version")
+            end
+          end
+          FORMULA_EOF
+          
+          # Replace placeholders with actual values
+          sed -i "s/VERSION_NUMBER_PLACEHOLDER/${VERSION_NUMBER}/g" "$FORMULA"
+          sed -i "s/TAG_PLACEHOLDER/${RELEASE_TAG}/g" "$FORMULA"
+          sed -i "s/SHA256_MACOS_ARM_PLACEHOLDER/${shas["aptu-cli-${VERSION_NUMBER}-aarch64-apple-darwin.tar.gz"]}/g" "$FORMULA"
+          sed -i "s/SHA256_LINUX_ARM_PLACEHOLDER/${shas["aptu-cli-${VERSION_NUMBER}-aarch64-unknown-linux-musl.tar.gz"]}/g" "$FORMULA"
+          sed -i "s/SHA256_LINUX_INTEL_PLACEHOLDER/${shas["aptu-cli-${VERSION_NUMBER}-x86_64-unknown-linux-musl.tar.gz"]}/g" "$FORMULA"
+
+      - name: Create feature branch and commit formula update
+        run: |
+          cd homebrew-tap
+          RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          BRANCH_NAME="update-aptu-${RELEASE_TAG}"
+          
+          git config user.email "hugues@linux.com"
+          git config user.name "Hugues Clouatre"
+          git checkout -b "$BRANCH_NAME"
+          git add Formula/aptu.rb
+          git commit --signoff -m "Update aptu formula for ${RELEASE_TAG}"
+          git push origin "$BRANCH_NAME"
+
+      - name: Create pull request with auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          cd homebrew-tap
+          RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          BRANCH_NAME="update-aptu-${RELEASE_TAG}"
+          
+          gh pr create \
+            --title "Update aptu formula for ${RELEASE_TAG}" \
+            --body "Automated formula update with SHA256 checksums for release ${RELEASE_TAG}" \
+            --head "$BRANCH_NAME" \
+            --base main
+          
+          # Auto-merge after Audit check passes (ruleset requires status checks)
+          gh pr merge "$BRANCH_NAME" --auto --squash --delete-branch
+
+  publish:
+    name: Publish to crates.io
+    needs: create-release
+    if: always() && needs.create-release.result == 'success' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
+        with:
+          toolchain: stable
+
+      - name: Authenticate to crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish aptu-core
+        run: cargo publish -p aptu-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Wait for index propagation
+        run: sleep 30
+
+      - name: Publish aptu-cli
+        run: cargo publish -p aptu-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

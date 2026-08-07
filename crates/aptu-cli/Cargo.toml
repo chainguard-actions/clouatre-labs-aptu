@@ -1,0 +1,88 @@
+[package]
+name = "aptu-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "CLI for Aptu - Gamified OSS issue triage with AI assistance"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+
+[[bin]]
+name = "aptu"
+path = "src/main.rs"
+
+[dependencies]
+# Core library
+aptu-core = { workspace = true, features = ["keyring", "ast-context"] }
+
+# CLI framework
+clap = { workspace = true }
+clap_complete = { workspace = true }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-saphyr = { workspace = true }
+
+# Error handling and logging
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# User experience
+indicatif = { workspace = true }
+dialoguer = { workspace = true }
+console = { workspace = true }
+comfy-table = { workspace = true }
+
+# Time and IDs
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+# Security
+secrecy = { workspace = true }
+
+# Paths
+dirs = { workspace = true }
+walkdir = { workspace = true }
+
+# Concurrency
+futures = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = "3"
+tempfile = { workspace = true }
+
+[package.metadata.deb]
+maintainer = "Hugues Clouâtre <hugues@linux.com>"
+copyright = "2025 Hugues Clouâtre <hugues@linux.com>"
+license-file = ["../../LICENSE", "4"]
+extended-description = """\
+Aptu is a gamified CLI for OSS issue triage with AI assistance. \
+It helps developers contribute meaningfully to open source projects \
+through AI-assisted issue analysis and triage."""
+section = "utility"
+priority = "optional"
+assets = [
+  ["target/release/aptu", "usr/bin/", "755"],
+  ["../../README.md", "usr/share/doc/aptu/", "644"],
+  ["../../LICENSE", "usr/share/doc/aptu/", "644"]
+]
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{version}/aptu-cli-{version}-{target}.tar.gz"
+bin-dir = "aptu"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{version}/aptu-cli-{version}-x86_64-unknown-linux-musl.tar.gz"
+
+[lints]
+workspace = true

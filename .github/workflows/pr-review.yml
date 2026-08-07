@@ -1,0 +1,64 @@
+name: Triage Pull Requests
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch: # Manual trigger for testing
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false  # each PR event must complete; cancellation by a follow-up push would leave review half-done
+
+permissions: {}
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Detect file changes
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+
+  review:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: read
+      attestations: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Review PR
+        uses: ./
+        continue-on-error: true  # Non-blocking - AI review is advisory
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          provider: gemini
+          model: gemini-3.1-flash-lite
+          skip-labeled: 'false'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          instructions-file: .github/instructions/pr-review.md
+          repo-path: ${{ github.workspace }}

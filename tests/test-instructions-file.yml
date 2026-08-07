@@ -1,0 +1,45 @@
+name: Test instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Create instructions file
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.github/instructions"
+          cat > "$GITHUB_WORKSPACE/.github/instructions/pr-review.md" <<'EOF'
+          # PR Review Instructions
+          Please review the PR for correctness and style.
+          EOF
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          instructions-file: '.github/instructions/pr-review.md'
+          dry-run: 'true'
+          no-comment: 'true'
+          skip-labeled: 'false'
+          pr-queue: 'false'
+      - name: Assert metrics outputs are set
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          # Under workflow_dispatch no AI calls are made, so tokens should be 0
+          if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: expected input-tokens to be set"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ] && [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: expected cache-hit-ratio to be set"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are set with instructions-file input"

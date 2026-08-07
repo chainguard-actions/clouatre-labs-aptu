@@ -1,0 +1,356 @@
+# Contributing to Aptu
+
+We welcome contributions! This document covers the essentials.
+
+## Non-Code Contributions
+
+Not a coder? You can still help Aptu grow:
+
+- **Write about Aptu** - Blog posts, tutorials, comparisons
+- **Share on social media** - Twitter/X, Mastodon, LinkedIn, Reddit
+- **Submit to newsletters** - This Week in Rust, Hacker News, dev.to
+- **Give talks** - Meetups, conferences, podcasts
+- **Create videos** - Demos, tutorials, reviews
+
+## Quick Start
+
+### Prerequisites
+
+- **Rust** - Automatically managed via `rust-toolchain.toml`
+- **Just** - Task runner for common commands
+
+Install Just:
+```bash
+# macOS
+brew install just
+
+# Linux
+cargo install just
+
+# Or see https://github.com/casey/just#installation
+```
+
+### Setup and Development Commands
+
+```bash
+git clone https://github.com/YOUR_USERNAME/aptu.git
+cd aptu
+
+# List all available commands
+just
+
+# Run format, lint, and test (recommended before commits)
+just check
+
+# Individual commands
+just fmt          # Check code formatting
+just fmt-fix      # Auto-fix formatting
+just lint         # Run clippy linter
+just lint-fix     # Auto-fix clippy issues
+just test         # Run unit tests
+just integration  # Run integration tests
+just build        # Build debug binary
+just build-release # Build optimized release binary
+just ci           # Run full CI pipeline locally
+just reuse        # Check REUSE license compliance
+just install      # Install binary to ~/.cargo/bin/
+just clean        # Remove build artifacts
+```
+
+### Manual Commands (without Just)
+
+If you prefer not to use Just:
+
+```bash
+# Tests run via nextest; install with: cargo install cargo-nextest (or use cargo-binstall)
+cargo nextest run --workspace   # Run tests
+# Also run the graph-feature (ast-context) test suite:
+cargo nextest run -p aptu-core --features ast-context
+cargo fmt        # Format code
+cargo clippy     # Lint
+cargo build      # Build binary
+```
+
+The `--features graph` flag enables the optional petgraph-backed structural graph context for `pr review`. It is not required for standard contributions.
+
+### Good First Issues
+
+New contributors are encouraged to start with issues labelled
+[`good-first-issue`](https://github.com/clouatre-labs/aptu/issues?q=is%3Aopen+label%3Agood-first-issue)
+or
+[`help-wanted`](https://github.com/clouatre-labs/aptu/issues?q=is%3Aopen+label%3Ahelp-wanted).
+
+Typical tasks in these categories include:
+
+- Improving documentation or fixing typos in existing docs
+- Applying fixes for clippy suggestions flagged in CI
+- Adding or improving `--help` text for CLI flags and subcommands
+- Writing tests for code paths that lack coverage
+- Updating dependency version constraints to resolve Renovate/Dependabot alerts
+
+If you are unsure where to start, leave a comment on the issue and the maintainer will help scope it.
+
+## Before Submitting
+
+```bash
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo nextest run --workspace
+```
+
+## Fuzzing
+
+Aptu includes cargo-fuzz targets to test parser robustness. Fuzzing requires Rust nightly:
+
+```bash
+# List available fuzz targets
+cargo +nightly fuzz list
+
+# Run the TOML parser fuzz target
+cargo +nightly fuzz run parse_toml
+
+# Run with a specific timeout (in seconds)
+cargo +nightly fuzz run parse_toml -- -max_total_time=60
+```
+
+Fuzz targets are located in `fuzz/fuzz_targets/` and are independent from the main workspace.
+
+## Commit Message Format
+
+We follow [Conventional Commits](https://www.conventionalcommits.org/) to enable automated semantic versioning and changelog generation. All commits must follow this format:
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+### Types
+
+- **feat**: A new feature
+- **fix**: A bug fix
+- **docs**: Documentation only changes
+- **style**: Changes that do not affect the meaning of the code (formatting, missing semicolons, etc.)
+- **refactor**: A code change that neither fixes a bug nor adds a feature
+- **perf**: A code change that improves performance
+- **test**: Adding missing tests or correcting existing tests
+- **chore**: Changes to build process, dependencies, or tooling
+
+### Examples
+
+```bash
+# Feature with scope
+git commit -s -m "feat(cli): add support for custom config paths"
+
+# Bug fix
+git commit -s -m "fix: resolve panic when parsing invalid labels"
+
+# Breaking change
+git commit -s -m "feat!: redesign API for issue filtering
+
+BREAKING CHANGE: The --filter flag has been replaced with --query"
+
+# Documentation
+git commit -s -m "docs: update installation instructions"
+```
+
+### Breaking Changes
+
+Mark breaking changes with `!` after the type/scope or use `BREAKING CHANGE:` in the footer:
+
+```bash
+git commit -s -m "feat!: change default behavior of triage command"
+```
+
+## Developer Certificate of Origin (DCO)
+
+All commits must be signed off to certify you have the right to submit the code:
+
+```bash
+git commit -s -m "Your commit message"
+```
+
+This adds `Signed-off-by: Your Name <email>` to your commit, certifying you agree to the [DCO](https://developercertificate.org/).
+
+## Pull Request Checklist
+
+- [ ] Tests pass (`cargo nextest run --workspace`)
+- [ ] No clippy warnings (`cargo clippy -- -D warnings`)
+- [ ] Code formatted (`cargo fmt`)
+- [ ] Commits signed off (`git commit -s`)
+- [ ] Clear PR description
+
+### Regression Test Policy
+
+Bug fixes must include a regression test that reproduces the reported behavior before the fix. This is a project standard for all fixes going forward. A focused test (even a single assertion) that fails on the unfixed code is sufficient.
+
+## Code Style
+
+- Follow Rust idioms
+- Use `cargo fmt`
+- Address clippy warnings
+- Write tests for new features
+- Markdown files are linted via `.markdownlint.jsonc` (enforces MD009 and MD035 rules; CI gate: markdownlint-cli2)
+
+## GitHub API Strategy
+
+We use a hybrid GraphQL + REST approach via Octocrab. **Default to REST unless GraphQL provides a clear benefit.**
+
+### Decision Heuristic
+
+Ask: *Does GraphQL save enough API calls to justify custom query/struct overhead?*
+
+**Use GraphQL when:**
+- Fetching **3+ related resource types** in one call (e.g., issue + labels + milestones + comments)
+- Batching **across multiple repos** using aliases
+- **Server-side filtering** reduces payload significantly
+
+**Use REST (Octocrab) when:**
+- Fetching **1-2 resource types** (e.g., list issues, get single issue)
+- Performing **mutations** (create, update, delete)
+- **Client-side filtering** is required anyway (negates GraphQL's advantage)
+- Octocrab has **typed builders** that match your use case
+
+### Examples
+
+| Scenario | Choice | Reasoning |
+|----------|--------|-----------|
+| Single-issue triage (issue + labels + milestones + assignees) | GraphQL | 1 call vs 4 REST calls |
+| List untriaged issues (filter by empty labels) | REST | Single resource, client-side filter anyway |
+| Update issue labels | REST | Mutation, Octocrab has `issues().update()` |
+| Fetch issues from 5 repos | GraphQL | Aliases batch into 1 call vs 5 REST calls |
+
+### File Locations
+
+- `github/graphql.rs` - Custom GraphQL queries and response types
+- `github/issues.rs` - REST operations via Octocrab typed builders
+
+**Rate limits**: Both share the same pool (5000/hour authenticated).
+
+## Branch Protection
+
+The `main` branch is protected by GitHub rulesets with the following rules:
+
+- **Required Status Checks**: All CI checks must pass before merging
+  - `Check Labels`: Validates PR labels
+  - `Lint`: Code formatting and linting checks
+  - `Test`: All tests must pass
+- **Signed Commits**: All commits must be signed (GPG or S/MIME)
+- **No Force Push**: History cannot be rewritten on main
+- **No Deletion**: The main branch cannot be deleted
+
+These protections ensure code quality and maintain a clean history. Make sure your commits are signed and all CI checks pass before opening a pull request.
+
+## Releasing
+
+Releases are automated via GitHub Actions. Maintainers with push access:
+
+### GPG Setup
+
+Configure a GPG key for signing commits and tags:
+
+1. **Generate a key** (if needed): `gpg --full-generate-key`
+2. **Configure Git**:
+   ```bash
+   gpg --list-secret-keys --keyid-format=long  # Find your KEY_ID
+   git config --global user.signingkey <KEY_ID>
+   git config --global commit.gpgsign true
+   git config --global tag.gpgsign true
+   ```
+3. **Add to GitHub**: `gpg --armor --export <KEY_ID> | pbcopy` (Linux: `xclip -selection clipboard`) and paste at [GitHub Settings](https://github.com/settings/keys)
+
+### Release Steps
+
+1. Update version in `Cargo.toml`
+2. Commit: `git commit -S -s -m "chore: bump version to X.Y.Z"`
+3. Tag: `git tag -s vX.Y.Z -m "vX.Y.Z"` -- must be a GPG-signed annotated tag; a lightweight tag (`git tag vX.Y.Z`) will be rejected by the `verify-tag-signature` gate and no assets will be built. Verify before pushing: `git tag -v vX.Y.Z`
+4. **First release of a new minor version only** (e.g. `vX.Y.0`, `vX.0.0`): pre-create the
+   floating tag before pushing, otherwise the release workflow fails (the `Release Tag Protection`
+   ruleset blocks `GITHUB_TOKEN` from creating new `refs/tags/v*` refs via POST, but allows
+   updating existing ones via PATCH):
+   ```bash
+   # Replace vX.Y with the new minor version.
+   # Only run this for the first release of a new minor; the tag must not exist yet.
+   # Verify first (exits non-zero if the tag is absent; pipe to /dev/null to suppress output):
+   #   gh api repos/clouatre-labs/aptu/git/ref/tags/vX.Y > /dev/null 2>&1 && echo "tag exists" || echo "tag absent -- safe to POST"
+   # If the tag already exists, confirm it points to the correct commit before proceeding.
+   # If it points to a wrong commit, move it via PATCH instead:
+   #   gh api repos/clouatre-labs/aptu/git/refs/tags/vX.Y -X PATCH -f sha="$(git rev-parse HEAD)" -F force=true
+   gh api repos/clouatre-labs/aptu/git/refs \
+     -X POST \
+     -f ref="refs/tags/vX.Y" \
+     -f sha="$(git rev-parse HEAD)"
+   ```
+5. Push: `git push origin main --tags`
+   - For any `vX.Y.Z` release, the workflow automatically moves the `vX.Y` floating tag
+     used by the GitHub Action (`clouatre-labs/aptu@vX.Y`) to the new commit.
+6. Edit the release to add highlights (see below)
+
+The workflow builds binaries (macOS ARM64, Linux ARM64/x86_64), signs artifacts with cosign, generates SLSA attestations, creates a GitHub release with auto-generated notes, publishes to crates.io, updates the Homebrew formula, and moves the `vX.Y` floating tag to the new commit (for any `vX.Y.Z` release).
+
+### Release Notes
+
+We use a hybrid approach: GitHub auto-generates a changelog from conventional commits, and maintainers add a curated "Highlights" section for user-facing communication.
+
+After the workflow completes, edit the release on GitHub to prepend:
+
+```markdown
+## [Theme or Summary]
+
+Brief description of what this release delivers.
+
+### Highlights
+
+- **Feature Name** - One-line description
+- **Another Feature** - One-line description
+
+---
+
+## Installation
+
+**Homebrew (macOS/Linux)**
+\`\`\`bash
+brew install clouatre-labs/tap/aptu
+\`\`\`
+
+**Cargo**
+\`\`\`bash
+cargo install aptu-cli
+\`\`\`
+
+---
+
+[Auto-generated changelog follows]
+```
+
+### Dry Run
+
+Test the release workflow before tagging:
+
+```bash
+gh workflow run release.yml -f dry_run=true -f version=X.Y.Z
+```
+
+This builds all targets without publishing or creating a release.
+
+### Asset Recovery
+
+If a release tag was pushed but the workflow failed before assets were uploaded (e.g., a lightweight tag was used instead of a signed annotated tag), trigger the release workflow manually against the existing tag:
+
+```bash
+gh workflow run release.yml -f tag_name=vX.Y.Z -f dry_run=false -f version=X.Y.Z
+```
+
+Or via the GitHub UI: Actions -> Release -> Run workflow -> set `tag_name` to the existing tag (e.g. `vX.Y.Z`), `dry_run` to `false`.
+
+This skips `verify-tag-signature`, targets the existing release object, builds and uploads all assets, and skips publish, Homebrew, and the floating-tag update (none of which are needed for asset recovery). Crates.io publish must be done separately if not already completed.
+
+### Versioning
+
+We follow [SemVer](https://semver.org/): MAJOR (breaking), MINOR (features), PATCH (fixes).
+
+## License
+
+By contributing, you agree your contributions are licensed under [Apache-2.0](LICENSE).

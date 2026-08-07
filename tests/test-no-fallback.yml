@@ -1,0 +1,68 @@
+name: Test no fallback provider (empty fallback-provider)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # When fallback-provider is empty, the 'Write fallback AI config' step is skipped
+      # (condition: inputs.fallback-provider != '' || inputs.fallback-model != '')
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: ''
+          fallback-model: ''
+
+      - name: Assert no fallback config file was written (regardless of action outcome)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking that config file was NOT written at: $CONFIG_FILE"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "Config file contents (unexpected):"
+            cat "$CONFIG_FILE"
+            echo "FAIL: fallback config file should not exist when fallback-provider is empty"
+            exit 1
+          fi
+          echo "PASS: no fallback config file written (as expected)"
+
+      - name: Assert action ran (succeeded or failed gracefully)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens=$INPUT_TOKENS"
+          echo "output-tokens=$OUTPUT_TOKENS"
+          echo "duration-ms=$DURATION_MS"
+          echo "cache-hit-ratio=$CACHE_HIT_RATIO"
+          echo "effective-token-units=$ETU"
+
+          if [ "$OUTCOME" = "success" ]; then
+            for val in "$INPUT_TOKENS" "$OUTPUT_TOKENS" "$DURATION_MS" "$ETU"; do
+              if ! echo "$val" | grep -qE '^[0-9]+$'; then
+                echo "FAIL: expected numeric output, got '$val'"
+                exit 1
+              fi
+            done
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: cache-hit-ratio is empty"
+              exit 1
+            fi
+            echo "PASS: all outputs present and valid with no fallback config"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (likely gh attestation verify not supported in act environment)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

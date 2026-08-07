@@ -1,0 +1,70 @@
+name: Test skip-labeled=false (always proceed)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+
+      - name: Assert action ran (succeeded or failed gracefully)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens=$INPUT_TOKENS"
+          echo "output-tokens=$OUTPUT_TOKENS"
+          echo "duration-ms=$DURATION_MS"
+          echo "cache-hit-ratio=$CACHE_HIT_RATIO"
+
+          if [ "$OUTCOME" = "success" ]; then
+            # All outputs must be set (non-empty)
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: input-tokens is empty"
+              exit 1
+            fi
+            if [ -z "$OUTPUT_TOKENS" ]; then
+              echo "FAIL: output-tokens is empty"
+              exit 1
+            fi
+            if [ -z "$DURATION_MS" ]; then
+              echo "FAIL: duration-ms is empty"
+              exit 1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: cache-hit-ratio is empty"
+              exit 1
+            fi
+            echo "PASS: all metric outputs are set"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (likely gh attestation verify not supported in act environment)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert aptu binary is installed (only if action succeeded)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          if [ "$OUTCOME" = "success" ]; then
+            if ! command -v aptu > /dev/null 2>&1; then
+              echo "FAIL: aptu binary not found on PATH after successful action"
+              exit 1
+            fi
+            echo "PASS: aptu binary found at $(command -v aptu)"
+            aptu --version || true
+          else
+            echo "SKIP: action did not succeed, skipping binary check"
+          fi

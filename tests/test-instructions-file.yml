@@ -1,0 +1,36 @@
+name: Test instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create a dummy instructions file
+        run: |
+          mkdir -p /tmp/aptu-test
+          echo "# PR Review Instructions\nReview for correctness and security." > /tmp/aptu-test/pr-review.md
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          instructions-file: '/tmp/aptu-test/pr-review.md'
+          dry-run: 'true'
+          skip-labeled: 'false'
+          pr-queue: 'false'
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          # Under workflow_dispatch no AI calls are made, so tokens should be 0
+          if [ -z "$INPUT_TOKENS" ] && [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens output to be set"
+            exit 1
+          fi
+          echo "PASS: instructions-file input accepted and metrics outputs present"

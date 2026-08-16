@@ -1,4 +1,4 @@
-name: Test fallback AI config is written when fallback-provider is set
+name: Test no fallback config written when fallback-provider is empty
 on:
   workflow_dispatch:
 jobs:
@@ -67,64 +67,37 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          fallback-provider: 'openrouter'
-          fallback-model: 'inception/mercury-2'
+          fallback-provider: ''
+          fallback-model: ''
           dry-run: 'true'
           no-comment: 'true'
           apply-labels: 'false'
           skip-labeled: 'false'
 
-      - name: Assert fallback config file was written
+      - name: Assert fallback config file was NOT written
         run: |
           CONFIG="$HOME/.config/aptu/config.toml"
-          echo "Checking for config at: $CONFIG"
-          if [ ! -f "$CONFIG" ]; then
-            echo "FAIL: expected config file not found at $CONFIG"
-            exit 1
-          fi
-          echo "Config contents:"
-          cat "$CONFIG"
-          echo "PASS: config file exists"
-
-      - name: Assert fallback config contains provider
-        run: |
-          CONFIG="$HOME/.config/aptu/config.toml"
-          if ! grep -q 'openrouter' "$CONFIG"; then
-            echo "FAIL: expected 'openrouter' in config file"
+          echo "Checking that config does NOT exist at: $CONFIG"
+          if [ -f "$CONFIG" ]; then
+            echo "FAIL: config file should not exist when fallback-provider is empty"
             cat "$CONFIG"
             exit 1
           fi
-          echo "PASS: provider found in config"
+          echo "PASS: config file correctly absent"
 
-      - name: Assert fallback config contains model
-        run: |
-          CONFIG="$HOME/.config/aptu/config.toml"
-          if ! grep -q 'inception/mercury-2' "$CONFIG"; then
-            echo "FAIL: expected 'inception/mercury-2' in config file"
-            cat "$CONFIG"
-            exit 1
-          fi
-          echo "PASS: model found in config"
-
-      - name: Assert metrics outputs are zero (no aptu commands fired)
+      - name: Assert metrics outputs are zero
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
-          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
-          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
           echo "input-tokens: $INPUT_TOKENS"
-          echo "output-tokens: $OUTPUT_TOKENS"
-          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT"
           if [ "$INPUT_TOKENS" != "0" ]; then
-            echo "FAIL: expected input-tokens=0"
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
             exit 1
           fi
-          if [ "$OUTPUT_TOKENS" != "0" ]; then
-            echo "FAIL: expected output-tokens=0"
-            exit 1
-          fi
-          if [ "$DURATION_MS" != "0" ]; then
-            echo "FAIL: expected duration-ms=0"
+          if [ "$CACHE_HIT" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT'"
             exit 1
           fi
           echo "PASS"

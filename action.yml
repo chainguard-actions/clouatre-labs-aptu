@@ -302,22 +302,22 @@ runs:
         set -e
 
         ISSUE_REF="${REPO}#${ISSUE_NUMBER}"
-        ARGS=()
+        ARGS=""
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS+=(--dry-run)
+          ARGS="$ARGS --dry-run"
         fi
 
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          ARGS+=(--no-apply)
+          ARGS="$ARGS --no-apply"
         fi
 
         if [[ "$NO_COMMENT" == "true" ]]; then
-          ARGS+=(--no-comment)
+          ARGS="$ARGS --no-comment"
         fi
 
-        echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"
-        aptu issue triage "${ARGS[@]}" "$ISSUE_REF"
+        echo "Running: aptu issue triage $ARGS $ISSUE_REF"
+        aptu issue triage $ARGS "$ISSUE_REF"
     - name: Run aptu issue triage (scheduled batch)
       if: github.event_name == 'schedule' && steps.check-skip.outputs.skip != 'true'
       shell: bash
@@ -381,14 +381,14 @@ runs:
         set -e
 
         PR_REF="${REPO}#${PR_NUMBER}"
-        ARGS=()
+        ARGS=""
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS+=(--dry-run)
+          ARGS="$ARGS --dry-run"
         fi
 
-        echo "Running: aptu pr label ${ARGS[*]} $PR_REF"
-        aptu pr label "${ARGS[@]}" "$PR_REF"
+        echo "Running: aptu pr label $ARGS $PR_REF"
+        aptu pr label $ARGS "$PR_REF"
     - name: Run aptu PR review
       if: github.event_name == 'pull_request'
       continue-on-error: true # Non-blocking - AI review is advisory

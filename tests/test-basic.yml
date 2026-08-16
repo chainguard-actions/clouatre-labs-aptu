@@ -1,4 +1,4 @@
-name: Test fallback AI config and effective-token-units output
+name: Test basic usage (workflow_dispatch, no AI calls)
 on:
   workflow_dispatch:
 jobs:
@@ -10,6 +10,15 @@ jobs:
       - name: Install fake gh CLI to bypass binary download and attestation
         run: |
           mkdir -p "$HOME/.local/fake-bin"
+
+          # Determine architecture name used by aptu releases
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            aarch64|arm64) ARCH_NAME="aarch64" ;;
+            *) ARCH_NAME="x86_64" ;;
+          esac
+          VERSION="0.8.3"
+          ARCHIVE="aptu-cli-${VERSION}-${ARCH_NAME}-unknown-linux-musl.tar.gz"
 
           cat > "$HOME/.local/fake-bin/gh" << 'GHSCRIPT'
           #!/bin/sh
@@ -24,10 +33,12 @@ jobs:
           CMD="$1 $2"
           case "$CMD" in
             "api repos/clouatre-labs/aptu/releases")
+              # Output the tag_name directly (gh api --jq extracts it)
               echo "v${VERSION}"
               exit 0
               ;;
             "release download")
+              # Find -D argument for destination directory
               DIR=""
               PREV=""
               for arg in "$@"; do
@@ -38,9 +49,12 @@ jobs:
                 echo "Error: -D flag not found" >&2
                 exit 1
               fi
+              # Create a minimal fake aptu binary
               printf '#!/bin/sh\necho "aptu fake v%s"\n' "$VERSION" > "$DIR/aptu"
               chmod +x "$DIR/aptu"
+              # Create the tar.gz archive
               tar -czf "$DIR/$ARCHIVE" -C "$DIR" aptu
+              # Create the sha256 checksum file
               (cd "$DIR" && sha256sum "$ARCHIVE" > "${ARCHIVE%.tar.gz}.sha256")
               exit 0
               ;;
@@ -50,6 +64,7 @@ jobs:
               ;;
           esac
 
+          # Fall through to real gh for anything else
           if [ -x /usr/bin/gh ]; then
             exec /usr/bin/gh "$@"
           fi
@@ -64,46 +79,49 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          fallback-provider: 'openrouter'
-          fallback-model: 'inception/mercury-2'
           dry-run: 'true'
-          no-comment: 'true'
           skip-labeled: 'false'
 
-      - name: Assert effective-token-units output is zero (no AI calls)
+      - name: Assert input-tokens output is zero (no AI calls under workflow_dispatch)
         env:
-          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
         run: |
-          echo "actual effective-token-units: $ACTUAL"
+          echo "actual input-tokens: $ACTUAL"
           if [ "$ACTUAL" != "0" ]; then
-            echo "FAIL: expected effective-token-units=0, got '$ACTUAL'"
+            echo "FAIL: expected input-tokens=0, got '$ACTUAL'"
             exit 1
           fi
           echo "PASS"
 
-      - name: Assert cost-usd output is present (may be empty string)
+      - name: Assert output-tokens output is zero
         env:
-          COST: ${{ steps.action.outputs.cost-usd }}
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
         run: |
-          echo "cost-usd: '$COST'"
-          # cost-usd may be empty when no AI calls are made — that is acceptable
-          echo "PASS: cost-usd output is accessible"
+          echo "actual output-tokens: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
 
-      - name: Assert fallback config file was written
+      - name: Assert duration-ms output is zero
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
         run: |
-          CONFIG="$HOME/.config/aptu/config.toml"
-          if [ ! -f "$CONFIG" ]; then
-            echo "FAIL: fallback config file not found at $CONFIG"
+          echo "actual duration-ms: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$ACTUAL'"
             exit 1
           fi
-          echo "Config contents:"
-          cat "$CONFIG"
-          if ! grep -q 'openrouter' "$CONFIG"; then
-            echo "FAIL: expected 'openrouter' in config"
+          echo "PASS"
+
+      - name: Assert cache-hit-ratio is n/a (no tokens consumed)
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "actual cache-hit-ratio: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$ACTUAL'"
             exit 1
           fi
-          if ! grep -q 'inception/mercury-2' "$CONFIG"; then
-            echo "FAIL: expected 'inception/mercury-2' in config"
-            exit 1
-          fi
-          echo "PASS: fallback config written correctly"
+          echo "PASS"

@@ -1,0 +1,45 @@
+name: Test skip-labeled=false skips nothing
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # With skip-labeled=false, the action should never skip regardless of labels.
+      # Under workflow_dispatch, github.event.issue.labels is empty/null,
+      # so skip=false in any case. The AI steps don't fire (wrong event type).
+      # continue-on-error: true lets us assert on metrics outputs even if the
+      # binary install fails under act (gh attestation verify may not be available).
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+
+      - name: Assert metrics outputs are zero (no AI calls made)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$CACHE_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_RATIO'"
+            exit 1
+          fi
+          echo "PASS"

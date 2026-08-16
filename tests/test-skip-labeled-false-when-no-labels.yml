@@ -1,0 +1,62 @@
+name: Test skip-labeled does not skip when issue has no labels
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Under workflow_dispatch, github.event.issue.labels is null/empty,
+      # so skip-labeled=true should NOT skip (issue lacks both type: and p[0-9] labels).
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+          pr-queue: 'false'
+
+      - name: Assert check-skip output is false (action ran through)
+        if: always()
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          # metrics-aggregate always runs; verify outputs are set (even if 0/n/a)
+          # The action should NOT have skipped (skip=false), so metrics-aggregate ran
+          # and set these outputs. Empty means the action was skipped entirely.
+          if [ -z "$CACHE_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio is empty, suggesting action was fully skipped or metrics-aggregate did not run"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are present (action ran through check-skip with skip=false)"
+
+      - name: Assert metrics outputs are zero (no AI calls made under workflow_dispatch)
+        if: always()
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_RATIO"
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$CACHE_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_RATIO'"
+            exit 1
+          fi
+          echo "PASS"

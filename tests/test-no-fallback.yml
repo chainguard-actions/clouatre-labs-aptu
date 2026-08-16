@@ -1,4 +1,4 @@
-name: Test skip-labeled logic (no labels present, skip=false expected)
+name: Test disabled fallback (empty fallback-provider)
 on:
   workflow_dispatch:
 jobs:
@@ -39,36 +39,43 @@ jobs:
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # With skip-labeled=true but no issue labels (workflow_dispatch has no issue context),
-      # the check-skip step should output skip=false (not enough labels to skip).
+      # When fallback-provider is set to empty string, the "Write fallback AI config"
+      # step is skipped (condition: inputs.fallback-provider != '' || inputs.fallback-model != '').
+      # The config.toml should NOT be written.
       - id: action
         uses: .
         with:
           github-token: ${{ github.token }}
-          skip-labeled: 'true'
+          fallback-provider: ''
+          fallback-model: ''
           dry-run: 'true'
           no-comment: 'true'
           apply-labels: 'false'
 
-      # Metrics should still be zero since no aptu commands ran under workflow_dispatch
-      - name: Assert input-tokens is 0
-        env:
-          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+      - name: Assert config file was NOT written
         run: |
-          echo "actual input-tokens: $ACTUAL"
-          if [ "$ACTUAL" != "0" ]; then
-            echo "FAIL: expected input-tokens=0, got '$ACTUAL'"
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking that config does NOT exist at: $CONFIG"
+          if [ -f "$CONFIG" ]; then
+            echo "FAIL: config.toml should not exist when fallback-provider is empty"
+            cat "$CONFIG"
             exit 1
           fi
-          echo "PASS"
+          echo "PASS: config.toml correctly absent"
 
-      - name: Assert cache-hit-ratio is n/a
+      - name: Assert metrics outputs are zero
         env:
-          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
-          echo "actual cache-hit-ratio: $ACTUAL"
-          if [ "$ACTUAL" != "n/a" ]; then
-            echo "FAIL: expected cache-hit-ratio=n/a, got '$ACTUAL'"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
             exit 1
           fi
           echo "PASS"

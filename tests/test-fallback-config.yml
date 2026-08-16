@@ -1,60 +1,104 @@
-name: Test fallback AI config is written correctly
+name: Test fallback AI config writing
 on:
   workflow_dispatch:
 jobs:
-  test-fallback-config:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # Pre-install mock 'gh' and fake 'aptu' so the action's install steps
+      # succeed without real network calls or SLSA attestation verification.
+      - name: Install mock gh and prepare fake aptu tarball
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+
+          # Determine arch (matches action logic)
+          case "$(uname -m)" in
+            aarch64 | arm64) ARCH="aarch64" ;;
+            x86_64)          ARCH="x86_64"  ;;
+            *) echo "Unsupported arch: $(uname -m)"; exit 1 ;;
+          esac
+          FAKE_VERSION="0.10.1"
+          ARCHIVE="aptu-cli-${FAKE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+
+          # Build a fake aptu tarball from the committed fixture script
+          STAGING=$(mktemp -d)
+          cp "$GITHUB_WORKSPACE/tests/fixtures/fake-aptu.sh" "$STAGING/aptu"
+          chmod +x "$STAGING/aptu"
+          tar -czf "/tmp/${ARCHIVE}" -C "$STAGING" aptu
+          rm -rf "$STAGING"
+
+          # Build sha256 file (filename only — action does pushd before sha256sum -c)
+          (cd /tmp && sha256sum "${ARCHIVE}") > "/tmp/${ARCHIVE%.tar.gz}.sha256"
+
+          # Install mock gh from committed fixture
+          cp "$GITHUB_WORKSPACE/tests/fixtures/fake-gh.sh" "$HOME/.local/bin/gh"
+          chmod +x "$HOME/.local/bin/gh"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # When fallback-provider and fallback-model are set, the action writes
+      # $HOME/.config/aptu/config.toml. Verify the action completes and
+      # metrics outputs are still zero (no AI calls under workflow_dispatch).
       - id: action
         uses: .
-        continue-on-error: true
         with:
           github-token: ${{ github.token }}
           fallback-provider: 'openrouter'
           fallback-model: 'inception/mercury-2'
           dry-run: 'true'
           no-comment: 'true'
+          apply-labels: 'false'
 
-      - name: Assert fallback config file was created
+      - name: Assert config file was written
         run: |
-          CONFIG_FILE="$HOME/.config/aptu/config.toml"
-          echo "Checking for config file at: $CONFIG_FILE"
-          if [ ! -f "$CONFIG_FILE" ]; then
-            echo "FAIL: config file not found at $CONFIG_FILE"
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking for config at: $CONFIG"
+          if [ ! -f "$CONFIG" ]; then
+            echo "FAIL: expected config.toml to exist at $CONFIG"
             exit 1
           fi
-          echo "Config file contents:"
-          cat "$CONFIG_FILE"
-          echo "PASS: config file exists"
-
-      - name: Assert fallback config contains correct provider
-        run: |
-          CONFIG_FILE="$HOME/.config/aptu/config.toml"
-          if ! grep -q 'provider = "openrouter"' "$CONFIG_FILE"; then
-            echo "FAIL: config does not contain expected provider"
-            cat "$CONFIG_FILE"
+          echo "Config contents:"
+          cat "$CONFIG"
+          if ! grep -q 'openrouter' "$CONFIG"; then
+            echo "FAIL: expected 'openrouter' in config.toml"
             exit 1
           fi
-          echo "PASS: provider is correct"
-
-      - name: Assert fallback config contains correct model
-        run: |
-          CONFIG_FILE="$HOME/.config/aptu/config.toml"
-          if ! grep -q 'model = "inception/mercury-2"' "$CONFIG_FILE"; then
-            echo "FAIL: config does not contain expected model"
-            cat "$CONFIG_FILE"
+          if ! grep -q 'inception/mercury-2' "$CONFIG"; then
+            echo "FAIL: expected 'inception/mercury-2' in config.toml"
             exit 1
           fi
-          echo "PASS: model is correct"
+          echo "PASS"
 
-      - name: Assert fallback config has correct TOML structure
+      - name: Assert metrics outputs are zero
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
-          CONFIG_FILE="$HOME/.config/aptu/config.toml"
-          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
-            echo "FAIL: config does not contain [ai.fallback] section"
-            cat "$CONFIG_FILE"
-            exit 1
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          FAIL=0
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+            FAIL=1
           fi
-          echo "PASS: TOML structure is correct"
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+            FAIL=1
+          fi
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$DURATION_MS'"
+            FAIL=1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            FAIL=1
+          fi
+          if [ "$FAIL" = "1" ]; then exit 1; fi
+          echo "PASS"

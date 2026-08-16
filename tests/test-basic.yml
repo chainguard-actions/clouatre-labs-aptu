@@ -1,4 +1,4 @@
-name: Test skip-labeled logic (no labels present, skip=false expected)
+name: Test basic usage (workflow_dispatch, no AI commands)
 on:
   workflow_dispatch:
 jobs:
@@ -39,19 +39,17 @@ jobs:
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # With skip-labeled=true but no issue labels (workflow_dispatch has no issue context),
-      # the check-skip step should output skip=false (not enough labels to skip).
       - id: action
         uses: .
         with:
           github-token: ${{ github.token }}
-          skip-labeled: 'true'
           dry-run: 'true'
           no-comment: 'true'
           apply-labels: 'false'
 
-      # Metrics should still be zero since no aptu commands ran under workflow_dispatch
-      - name: Assert input-tokens is 0
+      # Under workflow_dispatch, no aptu commands run (all gated on issues/pull_request/schedule).
+      # The metrics-aggregate step always runs and emits zero/n/a defaults.
+      - name: Assert input-tokens output is 0
         env:
           ACTUAL: ${{ steps.action.outputs.input-tokens }}
         run: |
@@ -62,13 +60,46 @@ jobs:
           fi
           echo "PASS"
 
-      - name: Assert cache-hit-ratio is n/a
+      - name: Assert output-tokens output is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "actual output-tokens: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert duration-ms output is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "actual duration-ms: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert cache-hit-ratio output is n/a
         env:
           ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
           echo "actual cache-hit-ratio: $ACTUAL"
           if [ "$ACTUAL" != "n/a" ]; then
             echo "FAIL: expected cache-hit-ratio=n/a, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert effective-token-units output is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "actual effective-token-units: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got '$ACTUAL'"
             exit 1
           fi
           echo "PASS"

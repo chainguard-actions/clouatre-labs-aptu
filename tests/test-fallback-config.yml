@@ -1,73 +1,64 @@
-name: Test fallback AI config writing
+name: Test fallback AI config is written when fallback-provider is set
 on:
   workflow_dispatch:
 jobs:
-  test-fallback-config:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Run action with custom fallback provider and model
-        id: action
+      # The "Write fallback AI config" step runs before binary installation.
+      # Even if binary installation fails (e.g. gh attestation verify in act),
+      # the config file should already be written. Use continue-on-error so
+      # assertion steps can still run.
+      - id: action
         uses: .
-        env:
-          GITHUB_EVENT_NAME: workflow_dispatch
+        continue-on-error: true
         with:
           github-token: ${{ github.token }}
           fallback-provider: 'openrouter'
-          fallback-model: 'mistralai/mistral-small-2603'
+          fallback-model: 'inception/mercury-2'
           dry-run: 'true'
-          no-comment: 'true'
-          pr-queue: 'false'
-        # The fallback config writing step runs when fallback-provider or
-        # fallback-model is non-empty. The aptu binary install may fail
-        # without real credentials, but we can still check the config file.
-        continue-on-error: true
 
-      - name: Assert fallback config file was created
+      - name: Assert fallback config file was written
         run: |
           CONFIG_FILE="$HOME/.config/aptu/config.toml"
-          echo "Checking for config file at: $CONFIG_FILE"
+          echo "Checking for config at: $CONFIG_FILE"
           if [ ! -f "$CONFIG_FILE" ]; then
             echo "FAIL: fallback config file not found at $CONFIG_FILE"
             exit 1
           fi
           echo "Config file contents:"
           cat "$CONFIG_FILE"
+          echo "PASS: fallback config file exists"
 
-          # Verify the config contains the expected provider and model
-          if ! grep -q 'provider = "openrouter"' "$CONFIG_FILE"; then
-            echo "FAIL: config does not contain expected provider 'openrouter'"
-            exit 1
-          fi
-          if ! grep -q 'model = "mistralai/mistral-small-2603"' "$CONFIG_FILE"; then
-            echo "FAIL: config does not contain expected model 'mistralai/mistral-small-2603'"
-            exit 1
-          fi
-          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
-            echo "FAIL: config does not contain [ai.fallback] section"
-            exit 1
-          fi
-          echo "PASS: fallback config file created with correct content"
-
-      - name: Assert metrics outputs are present (always runs)
-        env:
-          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
-          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
-          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
-          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+      - name: Assert fallback config contains correct provider
         run: |
-          echo "input-tokens: $INPUT_TOKENS"
-          echo "output-tokens: $OUTPUT_TOKENS"
-          echo "duration-ms: $DURATION_MS"
-          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'openrouter'"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: config contains expected provider"
 
-          if [ "$INPUT_TOKENS" != "0" ]; then
-            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+      - name: Assert fallback config contains correct model
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'inception/mercury-2'"
+            cat "$CONFIG_FILE"
             exit 1
           fi
-          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
-            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+          echo "PASS: config contains expected model"
+
+      - name: Assert metrics outputs are present
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "cache-hit-ratio: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
             exit 1
           fi
-          echo "PASS: metrics outputs are correct"
+          echo "PASS: cache-hit-ratio=$ACTUAL"

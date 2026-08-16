@@ -1,0 +1,74 @@
+name: Test basic usage - install and metrics outputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The action installs the aptu binary via gh release download + gh attestation verify.
+      # Under act, attestation verification may fail, so we use continue-on-error.
+      # The metrics-aggregate step in the composite action has if: always() so outputs
+      # are always emitted (as zeros when no AI calls are made under workflow_dispatch).
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+
+      - name: Assert input-tokens output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "input-tokens: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          echo "PASS: input-tokens=$ACTUAL"
+
+      - name: Assert output-tokens output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "output-tokens: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: output-tokens output is empty"
+            exit 1
+          fi
+          echo "PASS: output-tokens=$ACTUAL"
+
+      - name: Assert duration-ms output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "duration-ms: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: duration-ms output is empty"
+            exit 1
+          fi
+          echo "PASS: duration-ms=$ACTUAL"
+
+      - name: Assert cache-hit-ratio output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "cache-hit-ratio: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          echo "PASS: cache-hit-ratio=$ACTUAL"
+
+      - name: Assert effective-token-units output is present
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "effective-token-units: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: effective-token-units output is empty"
+            exit 1
+          fi
+          echo "PASS: effective-token-units=$ACTUAL"

@@ -316,7 +316,7 @@ runs:
           ARGS+=(--no-comment)
         fi
 
-        echo "Running: aptu issue triage ${ARGS[*]} \"$ISSUE_REF\""
+        echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"
         aptu issue triage "${ARGS[@]}" "$ISSUE_REF"
     - name: Run aptu issue triage (scheduled batch)
       if: github.event_name == 'schedule' && steps.check-skip.outputs.skip != 'true'
@@ -387,7 +387,7 @@ runs:
           ARGS+=(--dry-run)
         fi
 
-        echo "Running: aptu pr label ${ARGS[*]} \"$PR_REF\""
+        echo "Running: aptu pr label ${ARGS[*]} $PR_REF"
         aptu pr label "${ARGS[@]}" "$PR_REF"
     - name: Run aptu PR review
       if: github.event_name == 'pull_request'
@@ -442,7 +442,7 @@ runs:
           ARGS+=(--instructions-file "$INSTRUCTIONS_FILE")
         fi
 
-        echo "Running: aptu pr review ${ARGS[*]} \"$PR_REF\""
+        echo "Running: aptu pr review ${ARGS[*]} $PR_REF"
         aptu pr review "${ARGS[@]}" "$PR_REF"
     - name: Run aptu scan-security
       if: inputs.scan-path != '' || inputs.scan-security-diff != ''
@@ -464,10 +464,10 @@ runs:
       run: |
         set -e
         if [[ -n "$SCAN_DIFF" ]]; then
-          echo "Running: aptu scan-security --diff \"$SCAN_DIFF\" --output sarif"
+          echo "Running: aptu scan-security --diff $SCAN_DIFF --output sarif"
           aptu scan-security --diff "$SCAN_DIFF" --output sarif
         else
-          echo "Running: aptu scan-security \"$SCAN_PATH\" --output sarif"
+          echo "Running: aptu scan-security $SCAN_PATH --output sarif"
           aptu scan-security "$SCAN_PATH" --output sarif
         fi
     - name: Run aptu pr queue
@@ -488,7 +488,7 @@ runs:
         APTU_AI__MODEL: ${{ inputs.model }}
       run: |
         set -e
-        echo "Running: aptu pr queue --repo \"$REPO\""
+        echo "Running: aptu pr queue --repo $REPO"
         aptu pr queue --repo "$REPO"
     - name: Aggregate metrics outputs
       id: metrics-aggregate

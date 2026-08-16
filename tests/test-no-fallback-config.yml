@@ -1,4 +1,4 @@
-name: Test skip-labeled false when no labels
+name: Test no fallback config when provider is empty
 on:
   workflow_dispatch:
 jobs:
@@ -12,24 +12,35 @@ jobs:
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          skip-labeled: 'true'
+          fallback-provider: ''
+          fallback-model: ''
           dry-run: 'true'
+          skip-labeled: 'false'
 
-      # Under workflow_dispatch, github.event.issue.labels is null/empty,
-      # so skip-labeled=true should NOT skip (no type+priority labels present).
-      # The action should complete and produce zero metrics.
-      - name: Assert metrics outputs are present (action was not skipped entirely)
+      - name: Assert fallback config file was NOT written when provider is empty
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking that config file does NOT exist at: $CONFIG_FILE"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config file should not exist when provider is empty"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: config file correctly absent when fallback-provider is empty"
+
+      - name: Assert metrics outputs are still valid without fallback config
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
           OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
           DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
           CACHE_HIT: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
           echo "input-tokens: $INPUT_TOKENS"
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
+          echo "effective-token-units: $ETU"
           echo "cache-hit-ratio: $CACHE_HIT"
-          # All should be numeric (or n/a for cache-hit-ratio)
           if ! echo "$INPUT_TOKENS" | grep -qE '^[0-9]+$'; then
             echo "FAIL: input-tokens should be numeric, got: $INPUT_TOKENS"
             exit 1
@@ -42,4 +53,8 @@ jobs:
             echo "FAIL: duration-ms should be numeric, got: $DURATION_MS"
             exit 1
           fi
-          echo "PASS: action completed and produced valid metric outputs"
+          if ! echo "$ETU" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: effective-token-units should be numeric, got: $ETU"
+            exit 1
+          fi
+          echo "PASS: all metrics outputs are valid"

@@ -1,0 +1,82 @@
+name: Test all API key inputs coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: 'sk-ant-test-placeholder'
+          cerebras-api-key: 'csk-test-placeholder'
+          gemini-api-key: 'AIza-test-placeholder'
+          groq-api-key: 'gsk_test-placeholder'
+          openrouter-api-key: 'sk-or-test-placeholder'
+          zai-api-key: 'zai-test-placeholder'
+          zenmux-api-key: 'zmx-test-placeholder'
+          instructions-file: '.github/instructions/pr-review.md'
+          provider: 'openrouter'
+          model: 'mistralai/mistral-small-2603'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          apply-labels: 'true'
+          dry-run: 'true'
+          no-comment: 'true'
+          skip-labeled: 'false'
+          pr-queue: 'false'
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          echo "effective-token-units: $ETU"
+
+          # Metrics outputs should always be set (even if zero) because metrics-aggregate runs with if: always()
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms output is empty"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          if [ -z "$ETU" ]; then
+            echo "FAIL: effective-token-units output is empty"
+            exit 1
+          fi
+
+          # Since no AI calls were made (workflow_dispatch, no issue/PR/schedule event),
+          # token counts should be zero
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got $INPUT_TOKENS"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got $OUTPUT_TOKENS"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got $CACHE_HIT_RATIO"
+            exit 1
+          fi
+          echo "PASS: all metrics outputs are present and correct"

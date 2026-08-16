@@ -1,11 +1,9 @@
-name: Test fallback AI config is written
+name: Test fallback AI config writing
 on:
   workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      GITHUB_EVENT_NAME: workflow_dispatch
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -14,10 +12,10 @@ jobs:
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          dry-run: 'true'
-          skip-labeled: 'false'
           fallback-provider: 'openrouter'
           fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+          skip-labeled: 'false'
 
       - name: Assert fallback config file was written
         run: |
@@ -29,31 +27,47 @@ jobs:
           fi
           echo "Config file contents:"
           cat "$CONFIG_FILE"
-          # Verify it contains the expected provider
-          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain 'openrouter'"
-            exit 1
-          fi
-          # Verify it contains the expected model
-          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
-            echo "FAIL: config file does not contain 'inception/mercury-2'"
-            exit 1
-          fi
-          echo "PASS"
+          echo "PASS: config file exists"
 
-      - name: Assert metrics outputs are present
+      - name: Assert fallback config contains correct provider
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'provider = "openrouter"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected provider 'openrouter'"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: provider is correct"
+
+      - name: Assert fallback config contains correct model
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q 'model = "inception/mercury-2"' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain expected model 'inception/mercury-2'"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: model is correct"
+
+      - name: Assert fallback config has correct TOML structure
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain [ai.fallback] section"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: TOML structure is correct"
+
+      - name: Assert metrics outputs are valid after fallback config run
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
-          CACHE_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          CACHE_HIT: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
           echo "input-tokens: $INPUT_TOKENS"
-          echo "cache-hit-ratio: $CACHE_RATIO"
-          if [ "$INPUT_TOKENS" != "0" ]; then
-            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+          echo "cache-hit-ratio: $CACHE_HIT"
+          if ! echo "$INPUT_TOKENS" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: input-tokens should be numeric, got: $INPUT_TOKENS"
             exit 1
           fi
-          if [ "$CACHE_RATIO" != "n/a" ]; then
-            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_RATIO'"
-            exit 1
-          fi
-          echo "PASS"
+          echo "PASS: metrics outputs are valid"

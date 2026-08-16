@@ -1,0 +1,100 @@
+name: Test basic metrics outputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          skip-labeled: 'false'
+
+      - name: Assert input-tokens output is numeric
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "actual input-tokens: $ACTUAL"
+          if ! echo "$ACTUAL" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: expected a numeric value for input-tokens, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: input-tokens=$ACTUAL"
+
+      - name: Assert output-tokens output is numeric
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "actual output-tokens: $ACTUAL"
+          if ! echo "$ACTUAL" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: expected a numeric value for output-tokens, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: output-tokens=$ACTUAL"
+
+      - name: Assert duration-ms output is numeric
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "actual duration-ms: $ACTUAL"
+          if ! echo "$ACTUAL" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: expected a numeric value for duration-ms, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: duration-ms=$ACTUAL"
+
+      - name: Assert effective-token-units output is numeric
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "actual effective-token-units: $ACTUAL"
+          if ! echo "$ACTUAL" | grep -qE '^[0-9]+$'; then
+            echo "FAIL: expected a numeric value for effective-token-units, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: effective-token-units=$ACTUAL"
+
+      - name: Assert cache-hit-ratio output is n/a when no calls made
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "actual cache-hit-ratio: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected 'n/a' for cache-hit-ratio when no AI calls made, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: cache-hit-ratio=n/a"
+
+      - name: Assert zero metrics when no AI calls made
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "effective-token-units: $ETU"
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got: $INPUT_TOKENS"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got: $OUTPUT_TOKENS"
+            exit 1
+          fi
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got: $DURATION_MS"
+            exit 1
+          fi
+          if [ "$ETU" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got: $ETU"
+            exit 1
+          fi
+          echo "PASS: all metrics are zero as expected"

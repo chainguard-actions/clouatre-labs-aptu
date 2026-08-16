@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Aptu - Gamified OSS issue triage with AI assistance.
+//!
+//! A CLI tool that helps developers contribute meaningfully to open source
+//! projects through AI-assisted issue triage and PR review.
+
+mod cli;
+mod commands;
+mod errors;
+mod logging;
+mod output;
+mod provider;
+
+pub use provider::CliTokenProvider;
+
+use anyhow::{Context, Result};
+use aptu_core::ai::registry;
+use aptu_core::config;
+use aptu_core::utils;
+use clap::Parser;
+use tracing::{debug, info};
+
+use crate::cli::{Cli, OutputContext};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut cli = Cli::parse();
+    logging::init_logging(cli.output, cli.verbose);
+
+    let output_ctx = OutputContext::from_cli(cli.output, cli.verbose);
+
+    // Initialize keyring store
+    #[cfg(feature = "keyring")]
+    aptu_core::github::keyring_init().context("Failed to initialize keyring")?;
+
+    // Load config early to validate it works (Option A from plan)
+    let mut config = config::load_config().context("Failed to load configuration")?;
+    debug!("Configuration loaded successfully");
+
+    // Attempt to infer repository from git remote
+    if let Ok(inferred) = utils::infer_repo_from_git() {
+        cli.inferred_repo = Some(inferred.clone());
+        info!("Inferred repository from git remote: {}", inferred);
+    } else {
+        debug!("Could not infer repository from git remote");
+    }
+
+    // Apply CLI overrides to config
+    if let Some(provider) = &cli.provider {
+        registry::get_provider(provider)
+            .ok_or_else(|| anyhow::anyhow!("Unknown AI provider: {provider}"))?;
+        config.ai.provider.clone_from(provider);
+        // Also override task-specific configs to ensure CLI flags take precedence
+        if let Some(ref mut tasks) = config.ai.tasks {
+            if let Some(ref mut triage) = tasks.triage {
+                triage.provider.clone_from(&Some(provider.clone()));
+            }
+            if let Some(ref mut review) = tasks.review {
+                review.provider.clone_from(&Some(provider.clone()));
+            }
+            if let Some(ref mut create) = tasks.create {
+                create.provider.clone_from(&Some(provider.clone()));
+            }
+        }
+        debug!("Overriding AI provider to: {provider}");
+    }
+
+    if let Some(model) = &cli.model {
+        config.ai.model.clone_from(model);
+        // Also override task-specific configs to ensure CLI flags take precedence
+        if let Some(ref mut tasks) = config.ai.tasks {
+            if let Some(ref mut triage) = tasks.triage {
+                triage.model.clone_from(&Some(model.clone()));
+            }
+            if let Some(ref mut review) = tasks.review {
+                review.model.clone_from(&Some(model.clone()));
+            }
+            if let Some(ref mut create) = tasks.create {
+                create.model.clone_from(&Some(model.clone()));
+            }
+        }
+        debug!("Overriding AI model to: {model}");
+    }
+
+    let result = match commands::run(cli.command, output_ctx, &config, cli.inferred_repo).await {
+        Ok(()) => Ok(()),
+        Err(ref e) if e.is::<errors::ScanFindingsExit>() => {
+            std::process::exit(1);
+        }
+        Err(e) => {
+            let formatted = errors::format_error(&e);
+            eprintln!("Error: {formatted}");
+            Err(e)
+        }
+    };
+
+    // Tear down keyring store
+    #[cfg(feature = "keyring")]
+    aptu_core::github::keyring_deinit();
+
+    result
+}

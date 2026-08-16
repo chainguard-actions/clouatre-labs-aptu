@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Aptu Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+version = 2
+# RUSTSEC-2023-0071: Marvin Attack timing sidechannel in rsa 0.9.x.
+# No patch is available. rsa is a transitive dep of jsonwebtoken <- octocrab
+# (jwt-rust-crypto feature). JWT signing is not performed in an
+# attacker-observable timing context in this CLI; risk is accepted until an
+# upstream fix lands in jsonwebtoken or octocrab drops the rsa dependency.
+ignore = ["RUSTSEC-2023-0071"]
+
+[licenses]
+version = 2
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+exceptions = [
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+    { allow = ["LGPL-2.1-or-later"], crate = "r-efi" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

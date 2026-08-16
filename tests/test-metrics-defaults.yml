@@ -1,0 +1,134 @@
+name: Test metrics defaults (no AI calls)
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Mock the gh CLI so the action's resolve/download/verify steps succeed
+      # without real network access or credentials.
+      - name: Set up mock gh CLI and fake aptu binary
+        run: |
+          set -euo pipefail
+
+          case "$(uname -m)" in
+            aarch64 | arm64) ARCH="aarch64" ;;
+            x86_64)          ARCH="x86_64"  ;;
+          esac
+          FAKE_VERSION="0.10.3"
+          ARCHIVE="aptu-cli-${FAKE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+
+          # Pre-create the fake aptu binary at the expected install location.
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/bash\necho "fake aptu: $*"\nexit 0\n' > "$HOME/.local/bin/aptu"
+          chmod +x "$HOME/.local/bin/aptu"
+
+          # Prepare a fake release archive in case the install step runs anyway.
+          mkdir -p /tmp/fake-aptu-src
+          printf '#!/bin/bash\necho "fake aptu: $*"\nexit 0\n' > /tmp/fake-aptu-src/aptu
+          chmod +x /tmp/fake-aptu-src/aptu
+
+          mkdir -p /tmp/fake-release
+          tar -czf "/tmp/fake-release/${ARCHIVE}" -C /tmp/fake-aptu-src aptu
+          (cd /tmp/fake-release && sha256sum "${ARCHIVE}" > "${ARCHIVE%.tar.gz}.sha256")
+
+          echo "${FAKE_VERSION}" > /tmp/fake-release/version.txt
+          echo "${ARCHIVE}" > /tmp/fake-release/archive-name.txt
+
+          # Create a mock gh CLI using printf to avoid heredoc YAML issues.
+          mkdir -p /tmp/fake-bin
+          printf '%s\n' '#!/bin/bash' \
+            'CMD_ARGS=("$@")' \
+            'FULL_ARGS="$*"' \
+            'if echo "$FULL_ARGS" | grep -q "api repos/clouatre-labs/aptu/releases"; then' \
+            '  echo "v$(cat /tmp/fake-release/version.txt)"' \
+            'elif echo "$FULL_ARGS" | grep -q "release download"; then' \
+            '  DEST_DIR=""' \
+            '  i=0' \
+            '  while [ $i -lt ${#CMD_ARGS[@]} ]; do' \
+            '    if [ "${CMD_ARGS[$i]}" = "-D" ]; then' \
+            '      i=$((i+1))' \
+            '      DEST_DIR="${CMD_ARGS[$i]}"' \
+            '    fi' \
+            '    i=$((i+1))' \
+            '  done' \
+            '  if [ -n "$DEST_DIR" ]; then' \
+            '    ARCHIVE_NAME="$(cat /tmp/fake-release/archive-name.txt)"' \
+            '    cp "/tmp/fake-release/${ARCHIVE_NAME}" "$DEST_DIR/"' \
+            '    cp "/tmp/fake-release/${ARCHIVE_NAME%.tar.gz}.sha256" "$DEST_DIR/"' \
+            '  fi' \
+            'elif echo "$FULL_ARGS" | grep -q "attestation verify"; then' \
+            '  echo "Attestation verified (mock)"' \
+            '  exit 0' \
+            'else' \
+            '  echo "gh mock: unhandled: $FULL_ARGS" >&2' \
+            '  exit 0' \
+            'fi' > /tmp/fake-bin/gh
+          chmod +x /tmp/fake-bin/gh
+          echo "/tmp/fake-bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          github-token: fake-token-for-testing
+          dry-run: 'true'
+          skip-labeled: 'false'
+          pr-queue: 'false'
+
+      - name: Assert input-tokens default
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "actual input-tokens: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert output-tokens default
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "actual output-tokens: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert duration-ms default
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "actual duration-ms: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert effective-token-units default
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "actual effective-token-units: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected effective-token-units=0, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert cache-hit-ratio default
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "actual cache-hit-ratio: $ACTUAL"
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"

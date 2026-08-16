@@ -1,0 +1,425 @@
+[
+  {
+    "id": "hardcoded-api-key",
+    "description": "Hardcoded API key or secret token detected",
+    "pattern": "(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[=:]\\s*[\"'][a-zA-Z0-9_-]{20,}[\"']",
+    "severity": "critical",
+    "confidence": "high",
+    "cwe": "CWE-798",
+    "remediation": "Use environment variables or a secrets manager; never embed credentials in source code.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/798.html",
+    "file_extensions": []
+  },
+  {
+    "id": "hardcoded-password",
+    "description": "Hardcoded password detected",
+    "pattern": "(?i)(password|passwd|pwd)\\s*[=:]\\s*[\"'][^\"']{8,}[\"']",
+    "severity": "critical",
+    "confidence": "medium",
+    "cwe": "CWE-798",
+    "remediation": "Use environment variables or a secrets manager; never embed credentials in source code.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/798.html",
+    "file_extensions": []
+  },
+  {
+    "id": "sql-injection-concat",
+    "description": "Potential SQL injection via string concatenation",
+    "pattern": "(?i)(execute|query|exec)\\s*\\([^)]*(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)[^)]*\\+[^)]*\\)",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-89",
+    "remediation": "Use parameterized queries or prepared statements; never concatenate user input into SQL strings.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/89.html",
+    "file_extensions": [
+      ".rs",
+      ".py",
+      ".js",
+      ".ts",
+      ".java",
+      ".php"
+    ]
+  },
+  {
+    "id": "sql-injection-format",
+    "description": "Potential SQL injection via string formatting",
+    "pattern": "(?i)(execute|query|exec)\\s*\\([^)]*format[^)]*\\)",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-89",
+    "remediation": "Use parameterized queries or prepared statements; never concatenate user input into SQL strings.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/89.html",
+    "file_extensions": [
+      ".rs",
+      ".py",
+      ".js",
+      ".ts",
+      ".java",
+      ".php"
+    ]
+  },
+  {
+    "id": "path-traversal",
+    "description": "Potential path traversal vulnerability",
+    "pattern": "(?i)(open|read|write|include|require)\\s*\\([^)]*\\.\\.[/\\\\]",
+    "severity": "high",
+    "confidence": "high",
+    "cwe": "CWE-22",
+    "remediation": "Validate and canonicalize file paths; restrict access to an allowlisted base directory.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/22.html",
+    "file_extensions": []
+  },
+  {
+    "id": "command-injection",
+    "description": "Potential command injection via shell execution",
+    "pattern": "(?i)(exec|system|shell|popen|spawn)\\s*\\([^)]*\\+[^)]*\\)",
+    "severity": "critical",
+    "confidence": "medium",
+    "cwe": "CWE-78",
+    "remediation": "Avoid shell invocation; pass arguments as arrays to process APIs without shell interpolation.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/78.html",
+    "file_extensions": []
+  },
+  {
+    "id": "xss-innerhtml",
+    "description": "Potential XSS via innerHTML assignment",
+    "pattern": "(?i)innerHTML\\s*[=]\\s*[^;]*\\+",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-79",
+    "remediation": "Encode output contextually (HTML, JS, URL); apply a Content-Security-Policy header.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/79.html",
+    "file_extensions": [
+      ".js",
+      ".ts",
+      ".jsx",
+      ".tsx"
+    ]
+  },
+  {
+    "id": "insecure-random",
+    "description": "Use of insecure random number generator",
+    "pattern": "(?i)(Math\\.random|rand\\(\\)|random\\.randint)",
+    "severity": "medium",
+    "confidence": "low",
+    "cwe": "CWE-338",
+    "remediation": "Replace with a cryptographically secure RNG (e.g. OsRng, crypto/rand); never use math.random for security decisions.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/338.html",
+    "file_extensions": [
+      ".js",
+      ".ts",
+      ".py",
+      ".java"
+    ]
+  },
+  {
+    "id": "weak-crypto-md5",
+    "description": "Use of weak cryptographic hash MD5",
+    "pattern": "(?i)(md5|MD5)\\s*\\(",
+    "severity": "medium",
+    "confidence": "high",
+    "cwe": "CWE-327",
+    "remediation": "Replace MD5 with a modern algorithm (AES-256-GCM, ChaCha20-Poly1305, or SHA-256+).",
+    "authority_url": "https://cwe.mitre.org/data/definitions/327.html",
+    "file_extensions": []
+  },
+  {
+    "id": "weak-crypto-sha1",
+    "description": "Use of weak cryptographic hash SHA1",
+    "pattern": "(?i)(sha1|SHA1)\\s*\\(",
+    "severity": "medium",
+    "confidence": "high",
+    "cwe": "CWE-327",
+    "remediation": "Replace SHA-1 with a modern algorithm (AES-256-GCM, ChaCha20-Poly1305, or SHA-256+).",
+    "authority_url": "https://cwe.mitre.org/data/definitions/327.html",
+    "file_extensions": []
+  },
+  {
+    "id": "unsafe-deserialization",
+    "description": "Unsafe deserialization of untrusted data",
+    "pattern": "(?i)(pickle\\.loads|yaml\\.load|unserialize)\\s*\\(",
+    "severity": "critical",
+    "confidence": "high",
+    "cwe": "CWE-502",
+    "remediation": "Validate and sanitize input before deserializing; use type-safe deserializers and avoid pickle/yaml.load on untrusted data.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/502.html",
+    "file_extensions": [
+      ".py",
+      ".php",
+      ".java"
+    ]
+  },
+  {
+    "id": "xxe-vulnerability",
+    "description": "Potential XML External Entity (XXE) vulnerability",
+    "pattern": "(?i)(XMLReader|DocumentBuilder|SAXParser).*setFeature.*false",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-611",
+    "remediation": "Disable external entity and DTD processing in the XML parser configuration.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/611.html",
+    "file_extensions": [
+      ".java",
+      ".xml"
+    ]
+  },
+  {
+    "id": "insecure-tls",
+    "description": "Insecure TLS/SSL configuration",
+    "pattern": "(?i)(SSLv2|SSLv3|TLSv1\\.0|verify[_-]?mode.*NONE)",
+    "severity": "high",
+    "confidence": "high",
+    "cwe": "CWE-327",
+    "remediation": "Replace MD5/SHA-1/DES/SSLv2/SSLv3/TLSv1.0 with modern algorithms (AES-256-GCM, ChaCha20-Poly1305, TLSv1.2+).",
+    "authority_url": "https://cwe.mitre.org/data/definitions/327.html",
+    "file_extensions": []
+  },
+  {
+    "id": "debug-enabled",
+    "description": "Debug mode enabled in production code",
+    "pattern": "(?i)(debug\\s*[=:]\\s*true|DEBUG\\s*[=:]\\s*True)",
+    "severity": "low",
+    "confidence": "low",
+    "cwe": "CWE-489",
+    "remediation": "Remove or gate debug endpoints and verbose logging behind a compile-time or runtime feature flag.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/489.html",
+    "file_extensions": []
+  },
+  {
+    "id": "prompt-injection-ignore-instructions",
+    "description": "Detects attempts to override AI instructions via ignore directives",
+    "pattern": "(?i)ignore (all |previous |above )*(instructions|rules|guidelines)",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Sanitize and validate all user-supplied content before including it in AI prompts; apply input allowlists.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": []
+  },
+  {
+    "id": "prompt-injection-system-marker",
+    "description": "Detects SYSTEM: role marker injection attempts",
+    "pattern": "(?i)\\bSYSTEM\\b\\s*:",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Sanitize and validate all user-supplied content before including it in AI prompts; apply input allowlists.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": []
+  },
+  {
+    "id": "prompt-injection-newline-system",
+    "description": "Detects `system:` at the start of a line in a diff, a common prompt injection vector.",
+    "pattern": "(?m)^\\s*(?i)system\\s*:",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Sanitize and validate all user-supplied content before including it in AI prompts; apply input allowlists.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": []
+  },
+  {
+    "id": "prompt-injection-closing-tag",
+    "description": "Detects XML closing tag injection to escape pull_request context",
+    "pattern": "(?i)</pull_request>",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Escape or strip XML delimiters in user-supplied content before embedding it in structured AI prompts.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": [
+      ".md",
+      ".mdx",
+      ".txt",
+      ".html",
+      ".htm",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".toml",
+      ".rst",
+      ".org"
+    ]
+  },
+  {
+    "id": "prompt-injection-jailbreak-preamble",
+    "description": "Detects jailbreak preamble patterns that attempt to redefine AI persona",
+    "pattern": "(?i)you are now (a |an )?(malicious|evil|unrestricted|unfiltered|jailbroken|hacker|attacker)",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Sanitize and validate all user-supplied content before including it in AI prompts; apply input allowlists.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": []
+  },
+  {
+    "id": "prompt-injection-closing-tag-issue",
+    "description": "Attempt to escape issue_content XML delimiter boundary",
+    "pattern": "(?i)</issue_content>",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Escape or strip XML delimiters in user-supplied content before embedding it in structured AI prompts.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": [
+      ".md",
+      ".mdx",
+      ".txt",
+      ".html",
+      ".htm",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".toml",
+      ".rst",
+      ".org"
+    ]
+  },
+  {
+    "id": "prompt-injection-closing-tag-issue-body",
+    "description": "Attempt to escape issue_body XML delimiter boundary",
+    "pattern": "(?i)</issue_body>",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Escape or strip XML delimiters in user-supplied content before embedding it in structured AI prompts.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": [
+      ".md",
+      ".mdx",
+      ".txt",
+      ".html",
+      ".htm",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".toml",
+      ".rst",
+      ".org"
+    ]
+  },
+  {
+    "id": "prompt-injection-closing-tag-pr-diff",
+    "description": "Attempt to escape pr_diff XML delimiter boundary",
+    "pattern": "(?i)</pr_diff>",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Escape or strip XML delimiters in user-supplied content before embedding it in structured AI prompts.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": [
+      ".md",
+      ".mdx",
+      ".txt",
+      ".html",
+      ".htm",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".toml",
+      ".rst",
+      ".org"
+    ]
+  },
+  {
+    "id": "prompt-injection-closing-tag-commit-message",
+    "description": "Attempt to escape commit_message XML delimiter boundary",
+    "pattern": "(?i)</commit_message>",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Escape or strip XML delimiters in user-supplied content before embedding it in structured AI prompts.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": [
+      ".md",
+      ".mdx",
+      ".txt",
+      ".html",
+      ".htm",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".toml",
+      ".rst",
+      ".org"
+    ]
+  },
+  {
+    "id": "prompt-injection-closing-tag-pr-comment",
+    "description": "Attempt to escape pr_comment XML delimiter boundary",
+    "pattern": "(?i)</pr_comment>",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Escape or strip XML delimiters in user-supplied content before embedding it in structured AI prompts.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": [
+      ".md",
+      ".mdx",
+      ".txt",
+      ".html",
+      ".htm",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".toml",
+      ".rst",
+      ".org"
+    ]
+  },
+  {
+    "id": "prompt-injection-closing-tag-file-content",
+    "description": "Attempt to escape file_content XML delimiter boundary",
+    "pattern": "(?i)</file_content>",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-1336",
+    "remediation": "Escape or strip XML delimiters in user-supplied content before embedding it in structured AI prompts.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/1336.html",
+    "file_extensions": [
+      ".md",
+      ".mdx",
+      ".txt",
+      ".html",
+      ".htm",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".toml",
+      ".rst",
+      ".org"
+    ]
+  },
+  {
+    "id": "ssrf-http-request",
+    "description": "Potential SSRF: HTTP client called with variable URL. Verify the URL is validated against an allowlist before use.",
+    "pattern": "(?i)(reqwest::get|reqwest::Client|urllib\\.request\\.urlopen|axios\\.(get|post|put|delete)|http\\.get|http\\.post|curl_exec|wget)\\s*[\\(\\[](?:[^\\\"'\\)]*[a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)*)",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-918",
+    "remediation": "Validate and restrict outbound URLs to an allowlist; block requests to private IP ranges and metadata endpoints.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/918.html",
+    "file_extensions": []
+  },
+  {
+    "id": "open-redirect",
+    "description": "Potential open redirect: redirect target may be controlled by user input. Validate and restrict redirect URLs.",
+    "pattern": "(?i)(location\\.href|location\\.replace|location\\.assign|response\\.redirect|res\\.redirect|header\\s*\\(\\s*['\"]Location)\\s*[=:(]\\s*[^;]*?(req\\.|request\\.|params\\.|query\\.|args\\.)",
+    "severity": "high",
+    "confidence": "medium",
+    "cwe": "CWE-601",
+    "remediation": "Validate redirect targets against an allowlist of permitted domains; reject or encode external URLs.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/601.html",
+    "file_extensions": []
+  },
+  {
+    "id": "leaked-github-token",
+    "description": "Hardcoded GitHub App installation token (ghs_) detected",
+    "pattern": "ghs_[A-Za-z0-9._-]{36,}",
+    "severity": "critical",
+    "confidence": "high",
+    "cwe": "CWE-798",
+    "remediation": "Rotate the token immediately via GitHub App settings. Store credentials in environment variables or a secrets manager; never embed tokens in source code.",
+    "authority_url": "https://cwe.mitre.org/data/definitions/798.html",
+    "file_extensions": []
+  }
+]

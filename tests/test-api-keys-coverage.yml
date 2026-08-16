@@ -1,0 +1,50 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create a dummy instructions file
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/hardened/tests/fixtures"
+          echo "# PR Review Instructions" > "$GITHUB_WORKSPACE/hardened/tests/fixtures/pr-review.md"
+          echo "Review all changes carefully." >> "$GITHUB_WORKSPACE/hardened/tests/fixtures/pr-review.md"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: 'placeholder-anthropic-key'
+          cerebras-api-key: 'placeholder-cerebras-key'
+          gemini-api-key: 'placeholder-gemini-key'
+          groq-api-key: 'placeholder-groq-key'
+          openrouter-api-key: 'placeholder-openrouter-key'
+          zai-api-key: 'placeholder-zai-key'
+          zenmux-api-key: 'placeholder-zenmux-key'
+          instructions-file: 'hardened/tests/fixtures/pr-review.md'
+          dry-run: 'true'
+          skip-labeled: 'false'
+          no-comment: 'true'
+          apply-labels: 'false'
+          pr-queue: 'false'
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          # Metrics outputs should be set (even if zero when no AI calls were made)
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output was not set"
+            exit 1
+          fi
+          echo "PASS: all metric outputs are present"

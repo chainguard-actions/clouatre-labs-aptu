@@ -1,0 +1,99 @@
+name: Test basic usage - workflow_dispatch metrics outputs
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up fake gh and aptu for testing
+        run: |
+          set -euo pipefail
+
+          # Build a minimal fake aptu tarball that the fake gh will serve
+          mkdir -p /tmp/fake-aptu-src /tmp/fake-aptu-release
+          printf '#!/bin/sh\necho "fake aptu $*"\nexit 0\n' > /tmp/fake-aptu-src/aptu
+          chmod +x /tmp/fake-aptu-src/aptu
+          tar -czf /tmp/fake-aptu-release/fake.tar.gz -C /tmp/fake-aptu-src aptu
+
+          # Install fake gh wrapper (uses fixture script)
+          REAL_GH="$(command -v gh || echo /usr/bin/gh)"
+          mkdir -p "$HOME/.local/bin"
+          cp "$GITHUB_WORKSPACE/tests/fixtures/fake-gh.sh" "$HOME/.local/bin/gh"
+          # Embed the real gh path so the wrapper can fall through
+          sed -i "s|REAL_GH_PATH:-/usr/bin/gh|REAL_GH_PATH:-$REAL_GH|g" "$HOME/.local/bin/gh"
+          chmod +x "$HOME/.local/bin/gh"
+
+          # Prepend our bin dir to PATH for this and subsequent steps
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          skip-labeled: 'false'
+
+      - name: Assert input-tokens output is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-tokens }}
+        run: |
+          echo "actual input-tokens: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          echo "PASS: input-tokens=$ACTUAL"
+
+      - name: Assert output-tokens output is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "actual output-tokens: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: output-tokens output is empty"
+            exit 1
+          fi
+          echo "PASS: output-tokens=$ACTUAL"
+
+      - name: Assert duration-ms output is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.duration-ms }}
+        run: |
+          echo "actual duration-ms: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: duration-ms output is empty"
+            exit 1
+          fi
+          echo "PASS: duration-ms=$ACTUAL"
+
+      - name: Assert cache-hit-ratio output is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "actual cache-hit-ratio: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          # When no AI calls are made, cache-hit-ratio should be n/a
+          if [ "$ACTUAL" != "n/a" ]; then
+            echo "FAIL: expected 'n/a' but got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS: cache-hit-ratio=$ACTUAL"
+
+      - name: Assert effective-token-units output is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.effective-token-units }}
+        run: |
+          echo "actual effective-token-units: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: effective-token-units output is empty"
+            exit 1
+          fi
+          echo "PASS: effective-token-units=$ACTUAL"

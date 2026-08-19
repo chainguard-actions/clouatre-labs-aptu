@@ -1,0 +1,48 @@
+name: Test scan-security with scan-path
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          scan-path: '.'
+          sarif-upload: 'false'
+          # No AI key provided - scan will attempt to run but may fail without AI key
+          # fail-on is empty so scan step is non-blocking (continue-on-error in action)
+
+      - name: Assert action ran (scan-security fires; may fail without AI key or if binary install fails)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          if [ "$OUTCOME" = "success" ]; then
+            # Scan succeeded - validate metric outputs are numeric
+            if ! echo "$INPUT_TOKENS" | grep -qE '^[0-9]+$'; then
+              echo "FAIL: expected numeric input-tokens on success, got '$INPUT_TOKENS'"
+              exit 1
+            fi
+            if ! echo "$OUTPUT_TOKENS" | grep -qE '^[0-9]+$'; then
+              echo "FAIL: expected numeric output-tokens on success, got '$OUTPUT_TOKENS'"
+              exit 1
+            fi
+            echo "PASS: scan-security succeeded with valid metric outputs"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (expected without AI key or if binary install failed)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

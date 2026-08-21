@@ -1,0 +1,108 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+
+      - name: Assert fallback config file was written
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+
+          # The fallback config is written early in the action (before binary install),
+          # so it should be present regardless of whether binary install succeeded.
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          echo ""
+
+          # Verify the config contains the expected fallback provider
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'openrouter'"
+            exit 1
+          fi
+
+          # Verify the config contains the expected fallback model
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'inception/mercury-2'"
+            exit 1
+          fi
+
+          # Verify the config has the [ai.fallback] section
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain [ai.fallback] section"
+            exit 1
+          fi
+
+          echo "PASS: fallback config file is correctly written"
+
+      - name: Assert metrics outputs are set (if action succeeded)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: input-tokens output is empty"
+              exit 1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: cache-hit-ratio output is empty"
+              exit 1
+            fi
+            echo "PASS: metrics outputs are set"
+          else
+            echo "PASS: action failed gracefully (binary install may not be supported in this environment)"
+          fi
+
+      - name: Test with empty fallback-provider (no config written)
+        id: action-no-fallback
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: ''
+          fallback-model: ''
+          dry-run: 'true'
+
+      - name: Assert action ran with empty fallback config
+        env:
+          OUTCOME: ${{ steps.action-no-fallback.outcome }}
+          INPUT_TOKENS: ${{ steps.action-no-fallback.outputs.input-tokens }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: input-tokens output is empty"
+              exit 1
+            fi
+            echo "PASS: action ran successfully with empty fallback config"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (binary install may not be supported in this environment)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

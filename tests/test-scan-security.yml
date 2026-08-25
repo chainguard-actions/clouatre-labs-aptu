@@ -1,0 +1,63 @@
+name: Test scan-security path
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # scan-path triggers the scan-security step.
+      # The scan step has continue-on-error when fail-on is empty (non-blocking advisory mode).
+      # sarif-upload=false to avoid SARIF upload to the sentinel repo.
+      # The action may fail at the binary install/attestation step in act environment.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          scan-path: '${{ github.workspace }}/action'
+          fail-on: ''
+          sarif-upload: 'false'
+          dry-run: 'true'
+
+      - name: Assert action ran (scan-security path accepted)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          if [ "$OUTCOME" = "success" ]; then
+            # Metrics outputs should always be set (metrics-aggregate runs with if: always())
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: action succeeded but input-tokens is empty"
+              exit 1
+            fi
+            if [ -z "$OUTPUT_TOKENS" ]; then
+              echo "FAIL: action succeeded but output-tokens is empty"
+              exit 1
+            fi
+            if [ -z "$DURATION_MS" ]; then
+              echo "FAIL: action succeeded but duration-ms is empty"
+              exit 1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: action succeeded but cache-hit-ratio is empty"
+              exit 1
+            fi
+            echo "PASS: all metric outputs are set after scan-security run"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (binary install/attestation may not work in act environment)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

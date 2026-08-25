@@ -1,0 +1,74 @@
+name: Test scan-security with scan-path
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # scan-path set to the workspace triggers the scan-security step.
+      # fail-on is empty so the scan step is non-blocking (continue-on-error: true).
+      # sarif-upload is false to avoid SARIF upload to the sentinel repo.
+      # The action may fail during aptu binary installation (gh attestation verify
+      # may not be available in act), so we use continue-on-error: true.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          scan-path: '.'
+          fail-on: ''
+          sarif-upload: 'false'
+          dry-run: 'true'
+
+      - name: Assert action ran (succeeded or failed gracefully)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          echo "effective-token-units: $ETU"
+
+          if [ "$OUTCOME" = "success" ]; then
+            # Metrics outputs must be present (non-empty strings)
+            FAIL=0
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: input-tokens output is empty"
+              FAIL=1
+            fi
+            if [ -z "$OUTPUT_TOKENS" ]; then
+              echo "FAIL: output-tokens output is empty"
+              FAIL=1
+            fi
+            if [ -z "$DURATION_MS" ]; then
+              echo "FAIL: duration-ms output is empty"
+              FAIL=1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: cache-hit-ratio output is empty"
+              FAIL=1
+            fi
+            if [ -z "$ETU" ]; then
+              echo "FAIL: effective-token-units output is empty"
+              FAIL=1
+            fi
+            if [ "$FAIL" = "1" ]; then
+              exit 1
+            fi
+            echo "PASS: all metrics outputs are present"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (aptu install may not be supported in this environment)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

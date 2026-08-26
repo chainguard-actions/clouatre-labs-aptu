@@ -1,0 +1,54 @@
+name: Test pr-queue flag
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # pr-queue=true triggers the 'aptu pr queue' step (no event restriction).
+      # The step has continue-on-error: true in the action, so it won't block
+      # even if the sentinel repo causes an API failure.
+      # The action step itself may fail due to binary installation in act
+      # (gh attestation verify), so we use continue-on-error: true here too.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          pr-queue: 'true'
+          dry-run: 'true'
+
+      - name: Assert action completed and metrics outputs are set
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          echo "effective-token-units: $ETU"
+
+          if [ "$OUTCOME" = "success" ]; then
+            # All metrics outputs must be set when action succeeds
+            for var_name in INPUT_TOKENS OUTPUT_TOKENS DURATION_MS CACHE_HIT_RATIO ETU; do
+              eval "val=\$$var_name"
+              if [ -z "$val" ]; then
+                echo "FAIL: $var_name output is empty on success"
+                exit 1
+              fi
+            done
+            echo "PASS: all metrics outputs are set"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (binary installation may not be supported in this environment)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

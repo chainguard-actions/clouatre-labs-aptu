@@ -1,0 +1,649 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! AI request/response types for API communication.
+//!
+//! Defines the structures used for communicating with AI provider APIs
+//! and parsing triage responses.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Account credits status for `OpenRouter`.
+#[derive(Debug, Clone)]
+pub struct CreditsStatus {
+    /// Available credits in USD.
+    pub credits: f64,
+}
+
+impl CreditsStatus {
+    /// Returns a human-readable status message.
+    #[must_use]
+    pub fn message(&self) -> String {
+        format!("OpenRouter credits: ${:.4}", self.credits)
+    }
+}
+
+/// Cache control directive for prompt caching (Anthropic).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct CacheControl {
+    /// Cache type: "ephemeral" for Anthropic prompt caching.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Optional TTL for cache entries (not used for ephemeral caching).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>,
+}
+
+impl CacheControl {
+    /// Creates an ephemeral cache control directive.
+    #[must_use]
+    pub fn ephemeral() -> Self {
+        Self {
+            kind: "ephemeral".to_string(),
+            ttl: None,
+        }
+    }
+}
+
+/// A chat message for the `OpenRouter` API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ChatMessage {
+    /// Role: "system", "user", or "assistant".
+    pub role: String,
+    /// Message content. May be `null` for reasoning models (e.g. `minimax/minimax-m2.7`)
+    /// that place output in `reasoning` instead of `content`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// Reasoning output from reasoning models. Present when `content` is `null`.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// Cache control directive for prompt caching (Anthropic only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+}
+
+/// Request body for `OpenRouter` chat completions API.
+#[derive(Debug, Serialize)]
+pub(crate) struct ChatCompletionRequest {
+    /// Model identifier (e.g., "mistralai/mistral-small-2603").
+    pub model: String,
+    /// List of messages in the conversation.
+    pub messages: Vec<ChatMessage>,
+    /// Response format specification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
+    /// Maximum tokens in response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// Temperature for response randomness.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+}
+
+/// Response format specification for structured output.
+#[derive(Debug, Serialize)]
+pub(crate) struct ResponseFormat {
+    /// Type of response format ("`json_object`" or "`json_schema`" for structured output).
+    #[serde(rename = "type")]
+    pub format_type: String,
+    /// JSON schema for structured output (optional, used with `json_schema` type).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<serde_json::Value>,
+}
+
+/// Response from `OpenRouter` chat completions API.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChatCompletionResponse {
+    /// List of choices (usually just one).
+    pub choices: Vec<Choice>,
+    /// Usage information from the API.
+    #[serde(default)]
+    pub usage: Option<UsageInfo>,
+}
+
+/// Token usage information from the API.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub(crate) struct UsageInfo {
+    /// Number of tokens in the prompt.
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    /// Number of tokens in the completion.
+    #[serde(default)]
+    pub completion_tokens: u64,
+    /// Total tokens used.
+    #[serde(default)]
+    pub total_tokens: u64,
+    /// Cost in USD (from `OpenRouter` API).
+    #[serde(default)]
+    pub cost: Option<f64>,
+    /// Number of cache read tokens (from Anthropic API).
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    /// Number of cache write tokens (from Anthropic API).
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+}
+
+/// A single choice in the chat completion response.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Choice {
+    /// The generated message.
+    pub message: ChatMessage,
+    /// Reason the model stopped generating (e.g., `stop`, `length`).
+    /// Supports both `finish_reason` and `stop_reason` field names across providers.
+    #[serde(default)]
+    #[serde(alias = "stop_reason")]
+    pub finish_reason: Option<String>,
+}
+
+/// Guidance for contributors on whether an issue is beginner-friendly.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct ContributorGuidance {
+    /// Whether the issue is suitable for beginners.
+    pub beginner_friendly: bool,
+    /// Reasoning for the beginner-friendly assessment (1-2 sentences).
+    pub reasoning: String,
+}
+
+/// A related issue found via search.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct RelatedIssue {
+    /// Issue number.
+    pub number: u64,
+    /// Issue title.
+    pub title: String,
+    /// Reason why this issue is related.
+    pub reason: String,
+}
+
+/// Complexity level of an issue.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ComplexityLevel {
+    /// Low complexity: well-scoped, few files, minimal expertise required.
+    Low,
+    /// Medium complexity: moderate scope, multiple files or subsystems.
+    Medium,
+    /// High complexity: large scope, many files, or deep domain knowledge required.
+    High,
+}
+
+/// Automatic complexity assessment produced for every triage.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct ComplexityAssessment {
+    /// Overall complexity level: low, medium, or high.
+    pub level: ComplexityLevel,
+    /// Rough estimate of lines of code that would need to change.
+    #[serde(default)]
+    pub estimated_loc: Option<u32>,
+    /// Source files or subsystems likely affected.
+    #[serde(default)]
+    pub affected_areas: Vec<String>,
+    /// Human-readable recommendation, e.g. "Decompose into 3 sub-issues".
+    #[serde(default)]
+    pub recommendation: Option<String>,
+}
+
+/// Structured triage response from AI.
+///
+/// This is the expected JSON structure in the AI's response content.
+///
+/// # JSON Output
+///
+/// When using `--output json`, commands return this structure:
+///
+/// ```json
+/// {
+///   "summary": "Brief 2-3 sentence overview",
+///   "suggested_labels": ["bug", "needs-triage"],
+///   "clarifying_questions": ["What version?"],
+///   "potential_duplicates": [123, 456],
+///   "related_issues": [
+///     {"number": 789, "title": "Similar issue", "reason": "Same component"}
+///   ],
+///   "contributor_guidance": {
+///     "beginner_friendly": true,
+///     "reasoning": "Well-scoped with clear requirements"
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+pub struct TriageResponse {
+    /// 2-3 sentence summary of the issue.
+    pub summary: String,
+    /// Suggested labels for the issue.
+    pub suggested_labels: Vec<String>,
+    /// Clarifying questions for the issue reporter.
+    #[serde(default)]
+    pub clarifying_questions: Vec<String>,
+    /// Potential duplicate issue numbers/references.
+    #[serde(default)]
+    pub potential_duplicates: Vec<String>,
+    /// Related issues (not duplicates, but contextually relevant).
+    #[serde(default)]
+    pub related_issues: Vec<RelatedIssue>,
+    /// Status note about the issue (e.g., if it's already claimed or in-progress).
+    #[serde(default)]
+    pub status_note: Option<String>,
+    /// Guidance for contributors on beginner-friendliness.
+    #[serde(default)]
+    pub contributor_guidance: Option<ContributorGuidance>,
+    /// Implementation approach suggestions based on repository structure.
+    #[serde(default)]
+    pub implementation_approach: Option<String>,
+    /// Suggested milestone for the issue.
+    #[serde(default)]
+    pub suggested_milestone: Option<String>,
+    /// Automatic complexity assessment.
+    #[serde(default)]
+    pub complexity: Option<ComplexityAssessment>,
+}
+
+/// Context about a related issue from repository search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoIssueContext {
+    /// Issue number.
+    pub number: u64,
+    /// Issue title.
+    pub title: String,
+    /// Issue labels.
+    pub labels: Vec<String>,
+    /// Issue state (open or closed).
+    pub state: String,
+}
+
+/// A label available in the repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoLabel {
+    /// Label name.
+    pub name: String,
+    /// Label description.
+    pub description: String,
+    /// Label color (hex code).
+    pub color: String,
+}
+
+/// A milestone available in the repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoMilestone {
+    /// Milestone number.
+    pub number: u64,
+    /// Milestone title.
+    pub title: String,
+    /// Milestone description.
+    pub description: String,
+}
+
+/// Details about an issue for triage.
+#[derive(Debug, Clone, Serialize, Deserialize, bon::Builder)]
+pub struct IssueDetails {
+    /// Repository owner.
+    pub owner: String,
+    /// Repository name.
+    pub repo: String,
+    /// Issue number.
+    pub number: u64,
+    /// Issue title.
+    pub title: String,
+    /// Issue body (markdown content).
+    pub body: String,
+    /// Current labels on the issue.
+    #[builder(default)]
+    pub labels: Vec<String>,
+    /// Current milestone on the issue (if any).
+    #[serde(default)]
+    pub milestone: Option<String>,
+    /// Recent comments on the issue.
+    #[builder(default)]
+    pub comments: Vec<IssueComment>,
+    /// Issue URL.
+    pub url: String,
+    /// Related issues from repository search (for AI context).
+    #[serde(default)]
+    #[builder(default)]
+    pub repo_context: Vec<RepoIssueContext>,
+    /// Repository file tree (source files for implementation context).
+    #[serde(default)]
+    #[builder(default)]
+    pub repo_tree: Vec<String>,
+    /// Available labels in the repository.
+    #[serde(default)]
+    #[builder(default)]
+    pub available_labels: Vec<RepoLabel>,
+    /// Available milestones in the repository.
+    #[serde(default)]
+    #[builder(default)]
+    pub available_milestones: Vec<RepoMilestone>,
+    /// Viewer permission level on the repository.
+    #[serde(default)]
+    pub viewer_permission: Option<String>,
+    /// Issue author login.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Issue creation timestamp.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// Issue last update timestamp.
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// A comment on an issue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueComment {
+    /// Comment ID.
+    pub id: u64,
+    /// Comment author username.
+    pub author: String,
+    /// Comment body.
+    pub body: String,
+}
+
+/// Response from AI for creating an issue.
+///
+/// Contains formatted issue content and suggested labels based on AI analysis.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct CreateIssueResponse {
+    /// Formatted issue title (follows conventional commit style).
+    pub formatted_title: String,
+    /// Formatted issue body with structured sections.
+    pub formatted_body: String,
+    /// Suggested labels for the issue.
+    pub suggested_labels: Vec<String>,
+}
+
+/// Dependency release note enriched from registry APIs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepReleaseNote {
+    /// Package name (e.g., "tokio", "react", "django").
+    pub package_name: String,
+    /// Old version (e.g., "1.0.0").
+    pub old_version: String,
+    /// New version (e.g., "2.0.0").
+    pub new_version: String,
+    /// Registry type: "crates.io", "npm", or "pypi".
+    pub registry: String,
+    /// GitHub repository URL (e.g., <https://github.com/tokio-rs/tokio>).
+    pub github_url: String,
+    /// Release notes body (capped at `max_dep_release_chars`).
+    pub body: String,
+    /// Error message if release notes fetch failed (e.g., "404 Not Found", "timeout").
+    pub fetch_note: String,
+}
+
+/// Details about a pull request for AI review.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrDetails {
+    /// Repository owner.
+    pub owner: String,
+    /// Repository name.
+    pub repo: String,
+    /// Pull request number.
+    pub number: u64,
+    /// Pull request title.
+    pub title: String,
+    /// Pull request body/description.
+    pub body: String,
+    /// Base branch (target of the PR).
+    pub base_branch: String,
+    /// Head branch (source of the PR).
+    pub head_branch: String,
+    /// Files changed in the PR with their diffs.
+    pub files: Vec<PrFile>,
+    /// Pull request URL.
+    pub url: String,
+    /// Labels applied to the PR.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Head commit SHA (used as `commit_id` when posting inline review comments).
+    #[serde(default)]
+    pub head_sha: String,
+    /// Review comments on the PR.
+    #[serde(default)]
+    pub review_comments: Vec<PrReviewCommentDetails>,
+    /// Repository instructions (AGENTS.md or .github/instructions/pr-review.md) for context.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// Dependency release notes enriched from registry APIs.
+    #[serde(default)]
+    pub dep_enrichments: Vec<DepReleaseNote>,
+}
+
+/// A file changed in a pull request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrFile {
+    /// File path.
+    pub filename: String,
+    /// Change status (added, modified, removed, renamed).
+    pub status: String,
+    /// Number of additions.
+    pub additions: u64,
+    /// Number of deletions.
+    pub deletions: u64,
+    /// Unified diff patch (may be truncated for large files).
+    pub patch: Option<String>,
+    /// True if patch was truncated mid-hunk by GitHub API (detected by mid-hunk line ending).
+    #[serde(default)]
+    pub patch_truncated: bool,
+    /// Full file content fetched from GitHub Contents API (truncated at `max_chars_per_file`).
+    #[serde(default)]
+    pub full_content: Option<String>,
+}
+
+/// Details about a review comment on a PR.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrReviewCommentDetails {
+    /// Comment ID.
+    pub id: u64,
+    /// Comment author username.
+    pub author: String,
+    /// Comment body.
+    pub body: String,
+    /// File path the comment applies to.
+    #[serde(default)]
+    pub path: String,
+    /// Line number in the file.
+    #[serde(default)]
+    pub line: Option<u64>,
+    /// Side of the diff (LEFT or RIGHT).
+    #[serde(default)]
+    pub side: Option<String>,
+    /// Commit SHA the comment was made on.
+    #[serde(default)]
+    pub commit_id: String,
+}
+
+/// Severity level for PR review comments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CommentSeverity {
+    /// Informational comment.
+    Info,
+    /// Suggested improvement.
+    Suggestion,
+    /// Warning about potential issues.
+    Warning,
+    /// Critical issue that should be addressed.
+    Issue,
+}
+
+impl std::fmt::Display for CommentSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl CommentSeverity {
+    /// Returns the severity level as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            CommentSeverity::Info => "info",
+            CommentSeverity::Suggestion => "suggestion",
+            CommentSeverity::Warning => "warning",
+            CommentSeverity::Issue => "issue",
+        }
+    }
+}
+
+/// A specific comment on a line of code in a PR review.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct PrReviewComment {
+    /// File path the comment applies to.
+    pub file: String,
+    /// File line number for the inline comment. `None` comments are excluded from the
+    /// GitHub Reviews API payload and omitted from the posted review.
+    pub line: Option<u32>,
+    /// The comment text.
+    pub comment: String,
+    /// Severity level for the comment.
+    pub severity: CommentSeverity,
+    /// Optional corrected code for a GitHub suggestion block.
+    /// When present, the reviewer can apply the fix with one click.
+    /// Provide only the replacement lines (no diff markers).
+    #[serde(default)]
+    pub suggested_code: Option<String>,
+}
+
+/// Structured PR review response from AI.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+pub struct PrReviewResponse {
+    /// Overall summary of the PR (2-3 sentences).
+    pub summary: String,
+    /// Overall assessment: one of approve, request-changes, or comment.
+    pub verdict: String,
+    /// Key strengths of the PR.
+    #[serde(default)]
+    pub strengths: Vec<String>,
+    /// Areas of concern or improvement.
+    #[serde(default)]
+    pub concerns: Vec<String>,
+    /// Specific line-level comments.
+    #[serde(default)]
+    pub comments: Vec<PrReviewComment>,
+    /// Suggested improvements (not blocking).
+    #[serde(default)]
+    pub suggestions: Vec<String>,
+    /// Optional disclaimer about limitations (e.g., platform version validation).
+    #[serde(default)]
+    pub disclaimer: Option<String>,
+}
+
+/// Review event type for posting to GitHub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewEvent {
+    /// Post as a comment without approval/request.
+    Comment,
+    /// Approve the PR.
+    Approve,
+    /// Request changes to the PR.
+    RequestChanges,
+}
+
+impl std::fmt::Display for ReviewEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReviewEvent::Comment => write!(f, "COMMENT"),
+            ReviewEvent::Approve => write!(f, "APPROVE"),
+            ReviewEvent::RequestChanges => write!(f, "REQUEST_CHANGES"),
+        }
+    }
+}
+
+/// Structured PR label response from AI.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct PrLabelResponse {
+    /// Suggested labels for the PR.
+    pub suggested_labels: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::assert_matches;
+
+    use super::*;
+
+    #[test]
+    fn test_complexity_assessment_deserialize() {
+        let json = r#"{"level":"high","estimated_loc":450,"affected_areas":["crates/aptu-cli/src/cli.rs"],"recommendation":"Decompose into sub-issues"}"#;
+        let ca: ComplexityAssessment = serde_json::from_str(json).unwrap();
+        assert_matches!(ca.level, ComplexityLevel::High);
+        assert_eq!(ca.estimated_loc, Some(450));
+    }
+
+    #[test]
+    fn test_triage_response_missing_complexity() {
+        let json = r#"{"summary":"Test","suggested_labels":[],"clarifying_questions":[],"potential_duplicates":[],"related_issues":[]}"#;
+        let tr: TriageResponse = serde_json::from_str(json).unwrap();
+        assert!(tr.complexity.is_none());
+    }
+
+    #[test]
+    fn test_cache_control_serialization() {
+        let cache_control = CacheControl::ephemeral();
+        let json = serde_json::to_string(&cache_control).unwrap();
+        assert_eq!(json, r#"{"type":"ephemeral"}"#);
+    }
+
+    #[test]
+    fn test_chat_message_cache_control_included() {
+        let msg = ChatMessage {
+            role: "system".to_string(),
+            content: Some("test".to_string()),
+            reasoning: None,
+            cache_control: Some(CacheControl::ephemeral()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"ephemeral""#));
+    }
+
+    #[test]
+    fn test_chat_message_cache_control_omitted() {
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: Some("test".to_string()),
+            reasoning: None,
+            cache_control: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(!json.contains("cache_control"));
+    }
+
+    #[test]
+    fn test_choice_deserializes_with_finish_reason() {
+        let json = r#"{
+            "message": {
+                "role": "assistant",
+                "content": "test response"
+            },
+            "finish_reason": "stop"
+        }"#;
+        let choice: Choice = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(choice.finish_reason, Some("stop".to_string()));
+    }
+
+    #[test]
+    fn test_choice_deserializes_without_finish_reason() {
+        let json = r#"{
+            "message": {
+                "role": "assistant",
+                "content": "test response"
+            }
+        }"#;
+        let choice: Choice = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(choice.finish_reason, None);
+    }
+
+    #[test]
+    fn test_choice_deserializes_with_stop_reason_alias() {
+        let json = r#"{
+            "message": {
+                "role": "assistant",
+                "content": "test response"
+            },
+            "stop_reason": "length"
+        }"#;
+        let choice: Choice = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(choice.finish_reason, Some("length".to_string()));
+    }
+}

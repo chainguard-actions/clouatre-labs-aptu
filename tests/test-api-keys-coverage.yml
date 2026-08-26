@@ -1,0 +1,46 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: 'sk-ant-test-placeholder'
+          cerebras-api-key: 'csk-test-placeholder'
+          gemini-api-key: 'AIza-test-placeholder'
+          groq-api-key: 'gsk_test-placeholder'
+          openrouter-api-key: 'sk-or-test-placeholder'
+          zai-api-key: 'zai-test-placeholder'
+          zenmux-api-key: 'zmx-test-placeholder'
+          instructions-file: ''
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          skip-labeled: 'false'
+          pr-queue: 'false'
+          scan-path: ''
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # Under workflow_dispatch with no AI calls, metrics default to 0/n/a
+          if [ -z "$INPUT_TOKENS" ] && [ -z "$OUTPUT_TOKENS" ] && [ -z "$DURATION_MS" ] && [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: all metric outputs are empty — metrics-aggregate step did not run"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are present"

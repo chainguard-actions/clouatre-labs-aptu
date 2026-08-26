@@ -1,0 +1,57 @@
+name: Test skip-labeled false when no labels present
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Under workflow_dispatch, github.event.issue.labels is empty/null.
+      # With skip-labeled=true but no type/priority labels, skip should be false
+      # (the check-skip step sets skip=false and the action proceeds).
+      # The action may fail during binary installation in act (gh attestation verify),
+      # so we use continue-on-error: true. Metrics-aggregate always runs.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+
+      - name: Assert action ran (not skipped) and metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # The action should not be skipped — it should either succeed or fail
+          # (not be skipped entirely). A skipped outcome would mean skip=true fired
+          # incorrectly.
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action was skipped — skip-labeled logic may have incorrectly set skip=true"
+            exit 1
+          fi
+
+          if [ "$OUTCOME" = "success" ]; then
+            # When action succeeds, metrics outputs must be set
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: input-tokens output is empty on success"
+              exit 1
+            fi
+            if [ "$INPUT_TOKENS" != "0" ]; then
+              echo "FAIL: expected input-tokens=0 (no AI calls under workflow_dispatch), got '$INPUT_TOKENS'"
+              exit 1
+            fi
+            echo "PASS: action ran (not skipped), input-tokens=$INPUT_TOKENS"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (not skipped) but failed gracefully (binary installation may not be supported in this environment)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

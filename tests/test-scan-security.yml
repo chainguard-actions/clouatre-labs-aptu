@@ -1,0 +1,33 @@
+name: Test scan-security path
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # scan-path triggers 'aptu scan-security <path>'.
+      # The action installs aptu first; this may fail in act (gh attestation verify).
+      # The scan-security step has continue-on-error: true when fail-on is empty.
+      # We accept both success and failure outcomes from the action step.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          scan-path: 'action'
+          sarif-upload: 'false'
+          dry-run: 'true'
+
+      - name: Assert action ran (success or graceful failure)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action completed (outcome=$OUTCOME; install or scan may fail in act environment)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

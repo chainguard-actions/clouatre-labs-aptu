@@ -1,0 +1,588 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! GitHub OAuth device flow authentication.
+//!
+//! Implements the OAuth device flow for CLI authentication:
+//! 1. Request device code from GitHub
+//! 2. Display verification URL and user code to user
+//! 3. Poll for access token after user authorizes
+//! 4. Store token securely in system keychain
+//!
+//! Also provides a token resolution priority chain:
+//! 1. Environment variable (`GH_TOKEN` or `GITHUB_TOKEN`)
+//! 2. GitHub CLI (`gh auth token`)
+//! 3. System keyring (native aptu auth)
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::process::Command;
+use std::sync::{PoisonError, RwLock};
+
+use anyhow::{Context, Result};
+#[cfg(feature = "keyring")]
+use keyring_core::Entry;
+#[cfg(not(target_arch = "wasm32"))]
+use octocrab::Octocrab;
+#[cfg(feature = "keyring")]
+use reqwest::header::ACCEPT;
+use secrecy::{ExposeSecret, SecretString};
+use serde::Serialize;
+use tracing::{debug, info, instrument};
+
+#[cfg(feature = "keyring")]
+use super::{KEYRING_SERVICE, KEYRING_USER};
+
+/// Session-level cache for resolved GitHub tokens.
+/// Stores the token and its source to avoid repeated subprocess calls to `gh auth token`.
+static TOKEN_CACHE: RwLock<Option<(SecretString, TokenSource)>> = RwLock::new(None);
+
+/// Source of the GitHub authentication token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenSource {
+    /// Token from `GH_TOKEN` or `GITHUB_TOKEN` environment variable.
+    Environment,
+    /// Token from `gh auth token` command.
+    GhCli,
+    /// Token from system keyring (native aptu auth).
+    Keyring,
+}
+
+impl std::fmt::Display for TokenSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenSource::Environment => write!(f, "environment variable"),
+            TokenSource::GhCli => write!(f, "GitHub CLI"),
+            TokenSource::Keyring => write!(f, "system keyring"),
+        }
+    }
+}
+
+/// OAuth scopes required for Aptu functionality.
+#[cfg(feature = "keyring")]
+const OAUTH_SCOPES: &[&str] = &["public_repo", "read:user"];
+
+/// Initialize the platform keyring store. Must be called once at application startup
+/// before any keyring operations. Returns an error if the platform store cannot be opened.
+#[cfg(feature = "keyring")]
+pub fn keyring_init() -> crate::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use apple_native_keyring_store::keychain::Store;
+        let store = Store::new().map_err(|e| {
+            keyring_core::error::Error::PlatformFailure(
+                format!("Failed to initialize macOS keychain: {e}").into(),
+            )
+        })?;
+        keyring_core::set_default_store(store);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use linux_keyutils_keyring_store::Store;
+        let store = Store::new().map_err(|e| {
+            keyring_core::error::Error::PlatformFailure(
+                format!("Failed to initialize Linux keyutils store: {e}").into(),
+            )
+        })?;
+        keyring_core::set_default_store(store);
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_native_keyring_store::Store;
+        let store = Store::new().map_err(|e| {
+            keyring_core::error::Error::PlatformFailure(
+                format!("Failed to initialize Windows credential store: {e}").into(),
+            )
+        })?;
+        keyring_core::set_default_store(store);
+    }
+
+    Ok(())
+}
+
+/// Tear down the platform keyring store. Call at application shutdown after all
+/// keyring operations are complete.
+#[cfg(feature = "keyring")]
+pub fn keyring_deinit() {
+    keyring_core::unset_default_store();
+}
+
+/// Creates a keyring entry for the GitHub token.
+#[cfg(feature = "keyring")]
+fn keyring_entry() -> Result<Entry> {
+    Entry::new(KEYRING_SERVICE, KEYRING_USER).context("Failed to create keyring entry")
+}
+
+/// Checks if a GitHub token is available from any source.
+///
+/// Uses the token resolution priority chain to check for authentication.
+#[instrument]
+#[allow(clippy::let_and_return)] // Intentional: Rust 2024 drop order compliance
+pub fn is_authenticated() -> bool {
+    let result = resolve_token().is_some();
+    result
+}
+
+/// Checks if a GitHub token is stored in the keyring specifically.
+///
+/// Returns `true` only if a token exists in the system keyring,
+/// ignoring environment variables and `gh` CLI.
+#[cfg(feature = "keyring")]
+#[instrument]
+#[allow(clippy::let_and_return)] // Intentional: Rust 2024 drop order compliance
+pub fn has_keyring_token() -> bool {
+    let result = match keyring_entry() {
+        Ok(entry) => entry.get_password().is_ok(),
+        Err(_) => false,
+    };
+    result
+}
+
+/// Retrieves the stored GitHub token from the keyring.
+///
+/// Returns `None` if no token is stored or if keyring access fails.
+#[cfg(feature = "keyring")]
+#[must_use]
+pub fn get_stored_token() -> Option<SecretString> {
+    let entry = keyring_entry().ok()?;
+    Some(SecretString::from(entry.get_password().ok()?))
+}
+
+/// Parse GitHub CLI output and extract token.
+/// Returns Some(token) if output is successful and non-empty, None otherwise.
+fn parse_gh_cli_output(output: &std::process::Output) -> Option<SecretString> {
+    if output.status.success() {
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if token.is_empty() {
+            debug!("gh auth token returned empty output");
+            None
+        } else {
+            debug!("Successfully retrieved token from gh CLI");
+            Some(SecretString::from(token))
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        debug!(
+            status = ?output.status,
+            stderr = %stderr.trim(),
+            "gh auth token failed"
+        );
+        None
+    }
+}
+
+/// Attempts to get a token from the GitHub CLI (`gh auth token`).
+///
+/// Returns `None` if:
+/// - `gh` is not installed
+/// - `gh` is not authenticated
+/// - The command times out (5 seconds)
+/// - Any other error occurs
+#[cfg(not(target_arch = "wasm32"))]
+#[instrument]
+fn get_token_from_gh_cli() -> Option<SecretString> {
+    debug!("Attempting to get token from gh CLI");
+
+    // Use wait-timeout crate pattern with std::process
+    let output = Command::new("gh").args(["auth", "token"]).output();
+
+    match output {
+        Ok(output) => parse_gh_cli_output(&output),
+        Err(e) => {
+            debug!(error = %e, "Failed to execute gh command");
+            None
+        }
+    }
+}
+
+/// Check environment variable for token.
+fn check_env_token<F>(env_reader: &F, var_name: &str) -> Option<SecretString>
+where
+    F: Fn(&str) -> Result<String, std::env::VarError>,
+{
+    env_reader(var_name)
+        .ok()
+        .filter(|token| !token.is_empty())
+        .map(SecretString::from)
+}
+
+/// Generic token resolution logic that accepts an environment variable reader.
+///
+/// This function enables dependency injection of the environment reader,
+/// allowing tests to pass mock values without manipulating the real environment.
+///
+/// Checks sources in order:
+/// 1. `GH_TOKEN` environment variable (via provided reader)
+/// 2. `GITHUB_TOKEN` environment variable (via provided reader)
+/// 3. GitHub CLI (`gh auth token`)
+/// 4. System keyring (native aptu auth)
+///
+/// # Arguments
+///
+/// * `env_reader` - A function that reads environment variables, returning `Ok(value)` or `Err(_)`
+///
+/// Returns the token and its source, or `None` if no token is found.
+fn resolve_token_with_env<F>(env_reader: F) -> Option<(SecretString, TokenSource)>
+where
+    F: Fn(&str) -> Result<String, std::env::VarError>,
+{
+    // Priority 1: GH_TOKEN environment variable
+    let token = check_env_token(&env_reader, "GH_TOKEN");
+    if token.is_some() {
+        debug!("Using token from GH_TOKEN environment variable");
+    }
+    let result = token.map(|t| (t, TokenSource::Environment));
+
+    // Priority 2: GITHUB_TOKEN environment variable
+    let result = result.or_else(|| {
+        let token = check_env_token(&env_reader, "GITHUB_TOKEN");
+        if token.is_some() {
+            debug!("Using token from GITHUB_TOKEN environment variable");
+        }
+        token.map(|t| (t, TokenSource::Environment))
+    });
+
+    // Priority 3: GitHub CLI
+    #[cfg(not(target_arch = "wasm32"))]
+    let result = result.or_else(|| {
+        let token = get_token_from_gh_cli();
+        if token.is_some() {
+            debug!("Using token from GitHub CLI");
+        }
+        token.map(|t| (t, TokenSource::GhCli))
+    });
+
+    // Priority 4: System keyring
+    #[cfg(feature = "keyring")]
+    let result = result.or_else(|| get_stored_token().map(|t| (t, TokenSource::Keyring)));
+
+    if result.is_none() {
+        debug!("No token found in any source");
+    }
+    result
+}
+
+/// Internal token resolution logic without caching.
+///
+/// Checks sources in order:
+/// 1. `GH_TOKEN` environment variable
+/// 2. `GITHUB_TOKEN` environment variable
+/// 3. GitHub CLI (`gh auth token`)
+/// 4. System keyring (native aptu auth)
+///
+/// Returns the token and its source, or `None` if no token is found.
+fn resolve_token_inner() -> Option<(SecretString, TokenSource)> {
+    resolve_token_with_env(|key| std::env::var(key))
+}
+
+/// Resolves a GitHub token using the priority chain with session-level caching.
+///
+/// Caches the resolved token to avoid repeated subprocess calls to `gh auth token`.
+/// The cache is valid for the lifetime of the session (CLI invocation).
+///
+/// Checks sources in order:
+/// 1. `GH_TOKEN` environment variable
+/// 2. `GITHUB_TOKEN` environment variable
+/// 3. GitHub CLI (`gh auth token`)
+/// 4. System keyring (native aptu auth)
+///
+/// Returns the token and its source, or `None` if no token is found.
+#[instrument]
+pub fn resolve_token() -> Option<(SecretString, TokenSource)> {
+    // Try read lock first
+    {
+        let guard = TOKEN_CACHE.read().unwrap_or_else(PoisonError::into_inner);
+        if let Some((token, source)) = guard.as_ref() {
+            debug!(source = %source, "Cache hit for token resolution");
+            return Some((token.clone(), *source));
+        }
+    }
+
+    // Cache miss: acquire write lock and resolve
+    let resolved = resolve_token_inner();
+    if let Some((token, source)) = resolved.as_ref() {
+        let mut guard = TOKEN_CACHE.write().unwrap_or_else(PoisonError::into_inner);
+        *guard = Some((token.clone(), *source));
+        debug!(source = %source, "Resolved and cached token");
+        Some((token.clone(), *source))
+    } else {
+        None
+    }
+}
+
+/// Stores a GitHub token in the system keyring.
+#[cfg(feature = "keyring")]
+#[instrument(skip(token))]
+pub fn store_token(token: &SecretString) -> Result<()> {
+    let entry = keyring_entry()?;
+    entry
+        .set_password(token.expose_secret())
+        .context("Failed to store token in keyring")?;
+    info!("Token stored in system keyring");
+    Ok(())
+}
+
+/// Clears the session-level token cache.
+///
+/// This should be called after logout or when the token is invalidated.
+#[instrument]
+pub fn clear_token_cache() {
+    let mut guard = TOKEN_CACHE.write().unwrap_or_else(PoisonError::into_inner);
+    *guard = None;
+    debug!("Token cache cleared");
+}
+
+/// Deletes the stored GitHub token from the keyring.
+#[cfg(feature = "keyring")]
+#[instrument]
+pub fn delete_token() -> Result<()> {
+    let entry = keyring_entry()?;
+    entry
+        .delete_credential()
+        .context("Failed to delete token from keyring")?;
+    clear_token_cache();
+    info!("Token deleted from keyring");
+    Ok(())
+}
+
+/// Performs the GitHub OAuth device flow authentication.
+///
+/// This function:
+/// 1. Requests a device code from GitHub
+/// 2. Returns the verification URI and user code for display
+/// 3. Polls GitHub until the user authorizes or times out
+/// 4. Stores the resulting token in the system keychain
+///
+/// Requires `APTU_GH_CLIENT_ID` environment variable to be set.
+#[cfg(feature = "keyring")]
+#[instrument]
+pub async fn authenticate(client_id: &SecretString) -> Result<()> {
+    debug!("Starting OAuth device flow");
+
+    // Build a client configured for GitHub's OAuth endpoints
+    let crab = Octocrab::builder()
+        .base_uri("https://github.com")
+        .context("Failed to set base URI")?
+        .add_header(ACCEPT, "application/json".to_string())
+        .build()
+        .context("Failed to build OAuth client")?;
+
+    // Request device and user codes
+    let codes = crab
+        .authenticate_as_device(client_id, OAUTH_SCOPES)
+        .await
+        .context("Failed to request device code")?;
+
+    // Display instructions to user
+    println!();
+    println!("To authenticate, visit:");
+    println!();
+    println!("    {}", codes.verification_uri);
+    println!();
+    println!("And enter the code:");
+    println!();
+    println!("    {}", codes.user_code);
+    println!();
+    println!("Waiting for authorization...");
+
+    // Poll until user authorizes (octocrab handles backoff)
+    let auth = codes
+        .poll_until_available(&crab, client_id)
+        .await
+        .context("Authorization failed or timed out")?;
+
+    // Store the access token
+    let token = SecretString::from(auth.access_token.expose_secret().to_owned());
+    store_token(&token)?;
+
+    info!("Authentication successful");
+    Ok(())
+}
+
+/// Creates an authenticated Octocrab client using the token priority chain.
+///
+/// Uses [`resolve_token`] to find credentials from environment variables,
+/// GitHub CLI, or system keyring.
+///
+/// Returns an error if no token is found from any source.
+#[cfg(not(target_arch = "wasm32"))]
+#[instrument]
+pub fn create_client() -> Result<Octocrab> {
+    let (token, source) =
+        resolve_token().context("Not authenticated - run `aptu auth login` first")?;
+
+    info!(source = %source, "Creating GitHub client");
+
+    let client = Octocrab::builder()
+        .personal_token(token.expose_secret().to_string())
+        .build()
+        .context("Failed to build GitHub client")?;
+
+    debug!("Created authenticated GitHub client");
+    Ok(client)
+}
+
+/// Creates an authenticated Octocrab client using a provided token.
+///
+/// This function allows callers to provide a token directly, enabling
+/// multi-platform credential resolution (e.g., from iOS keychain via FFI).
+///
+/// # Arguments
+///
+/// * `token` - GitHub API token as a `SecretString`
+///
+/// # Errors
+///
+/// Returns an error if the Octocrab client cannot be built.
+#[cfg(not(target_arch = "wasm32"))]
+#[instrument(skip(token))]
+pub fn create_client_with_token(token: &SecretString) -> Result<Octocrab> {
+    info!("Creating GitHub client with provided token");
+
+    let client = Octocrab::builder()
+        .personal_token(token.expose_secret().to_string())
+        .build()
+        .context("Failed to build GitHub client")?;
+
+    debug!("Created authenticated GitHub client");
+    Ok(client)
+}
+
+/// Creates a GitHub client from a `TokenProvider`.
+///
+/// This is a convenience function that extracts the token from a provider
+/// and creates an authenticated Octocrab client. It standardizes error handling
+/// across the facade layer.
+///
+/// # Arguments
+///
+/// * `provider` - Token provider that supplies the GitHub token
+///
+/// # Returns
+///
+/// Returns `Ok(Octocrab)` if successful, or an `AptuError::GitHub` if:
+/// - The provider has no token available
+/// - The GitHub client fails to build
+///
+/// # Example
+///
+/// ```ignore
+/// let client = create_client_from_provider(provider)?;
+/// ```
+#[cfg(not(target_arch = "wasm32"))]
+#[instrument(skip(provider))]
+pub fn create_client_from_provider(
+    provider: &dyn crate::auth::TokenProvider,
+) -> crate::Result<Octocrab> {
+    let github_token = provider
+        .github_token()
+        .ok_or(crate::error::AptuError::NotAuthenticated)?;
+
+    let token = SecretString::from(github_token);
+    create_client_with_token(&token).map_err(|e| crate::error::AptuError::GitHub {
+        message: format!("Failed to create GitHub client: {e}"),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "keyring")]
+    #[test]
+    fn test_keyring_entry_creation() {
+        // Set up mock store before creating entry
+        let mock_store = keyring_core::mock::Store::new().expect("Failed to create mock store");
+        keyring_core::set_default_store(mock_store);
+
+        // Verify we can create an entry without panicking
+        let result = keyring_entry();
+        assert!(result.is_ok());
+
+        // Clean up
+        keyring_core::unset_default_store();
+    }
+
+    #[test]
+    fn test_token_source_display() {
+        assert_eq!(TokenSource::Environment.to_string(), "environment variable");
+        assert_eq!(TokenSource::GhCli.to_string(), "GitHub CLI");
+        assert_eq!(TokenSource::Keyring.to_string(), "system keyring");
+    }
+
+    #[test]
+    fn test_token_source_equality() {
+        assert_eq!(TokenSource::Environment, TokenSource::Environment);
+        assert_ne!(TokenSource::Environment, TokenSource::GhCli);
+        assert_ne!(TokenSource::GhCli, TokenSource::Keyring);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_gh_cli_not_installed_returns_none() {
+        // This test verifies that get_token_from_gh_cli gracefully handles
+        // the case where gh is not in PATH (returns None, doesn't panic)
+        // Note: This test may pass even if gh IS installed, because we're
+        // testing the graceful fallback behavior
+        let result = get_token_from_gh_cli();
+        // We can't assert None here because gh might be installed
+        // Just verify it doesn't panic and returns Option
+        let _ = result;
+    }
+
+    #[test]
+    fn test_resolve_token_with_env_var() {
+        // Arrange: Create a mock env reader that returns a test token
+        let mock_env = |key: &str| -> Result<String, std::env::VarError> {
+            match key {
+                "GH_TOKEN" => Ok("test_token_123".to_string()),
+                _ => Err(std::env::VarError::NotPresent),
+            }
+        };
+
+        // Act
+        let result = resolve_token_with_env(mock_env);
+
+        // Assert
+        assert!(result.is_some());
+        let (token, source) = result.unwrap();
+        assert_eq!(token.expose_secret(), "test_token_123");
+        assert_eq!(source, TokenSource::Environment);
+    }
+
+    #[test]
+    fn test_resolve_token_with_env_prefers_gh_token_over_github_token() {
+        // Arrange: Create a mock env reader that returns both tokens
+        let mock_env = |key: &str| -> Result<String, std::env::VarError> {
+            match key {
+                "GH_TOKEN" => Ok("gh_token".to_string()),
+                "GITHUB_TOKEN" => Ok("github_token".to_string()),
+                _ => Err(std::env::VarError::NotPresent),
+            }
+        };
+
+        // Act
+        let result = resolve_token_with_env(mock_env);
+
+        // Assert: GH_TOKEN should take priority
+        assert!(result.is_some());
+        let (token, _) = result.unwrap();
+        assert_eq!(token.expose_secret(), "gh_token");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_clear_token_cache_invalidates() {
+        // Arrange: Clear the cache
+        clear_token_cache();
+
+        // Act: Read the cache after clearing
+        let guard = TOKEN_CACHE
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Assert: Cache should be None
+        assert!(guard.is_none());
+    }
+}

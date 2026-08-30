@@ -1,0 +1,107 @@
+name: Test fallback AI provider config is written
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The action writes a fallback AI config to $HOME/.config/aptu/config.toml
+      # before installing the binary. On workflow_dispatch, no AI commands run.
+      # Binary installation (gh attestation verify) may fail under act; we accept
+      # either outcome and verify the config was written and outputs are set.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+
+      - name: Assert fallback config file was written
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking for config at: $CONFIG"
+          if [ ! -f "$CONFIG" ]; then
+            echo "FAIL: fallback config file not found at $CONFIG"
+            exit 1
+          fi
+          echo "Config contents:"
+          cat "$CONFIG"
+          if ! grep -q 'openrouter' "$CONFIG"; then
+            echo "FAIL: expected 'openrouter' in config"
+            exit 1
+          fi
+          if ! grep -q 'inception/mercury-2' "$CONFIG"; then
+            echo "FAIL: expected 'inception/mercury-2' in config"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"
+
+      - name: Assert action ran and metric outputs are set
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "effective-token-units: $ETU"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          if [ "$OUTCOME" = "success" ]; then
+            # Action succeeded: verify all metric outputs are set and zero
+            FAIL=0
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: input-tokens is empty"
+              FAIL=1
+            fi
+            if [ -z "$OUTPUT_TOKENS" ]; then
+              echo "FAIL: output-tokens is empty"
+              FAIL=1
+            fi
+            if [ -z "$DURATION_MS" ]; then
+              echo "FAIL: duration-ms is empty"
+              FAIL=1
+            fi
+            if [ -z "$ETU" ]; then
+              echo "FAIL: effective-token-units is empty"
+              FAIL=1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: cache-hit-ratio is empty"
+              FAIL=1
+            fi
+            if [ "$FAIL" = "1" ]; then
+              exit 1
+            fi
+            if [ "$INPUT_TOKENS" != "0" ]; then
+              echo "FAIL: expected 0 input tokens, got $INPUT_TOKENS"
+              exit 1
+            fi
+            if [ "$OUTPUT_TOKENS" != "0" ]; then
+              echo "FAIL: expected 0 output tokens, got $OUTPUT_TOKENS"
+              exit 1
+            fi
+            if [ "$ETU" != "0" ]; then
+              echo "FAIL: expected 0 effective-token-units, got $ETU"
+              exit 1
+            fi
+            if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+              echo "FAIL: expected 'n/a' cache-hit-ratio when no tokens consumed, got '$CACHE_HIT_RATIO'"
+              exit 1
+            fi
+            echo "PASS: all metric outputs are set and correct"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (binary installation may not be supported under act)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

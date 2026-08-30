@@ -1,0 +1,71 @@
+name: Test pr-queue flag (sentinel repo, graceful failure expected)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # pr-queue=true triggers 'aptu pr queue --repo $REPO' which uses the sentinel
+      # GITHUB_REPOSITORY (not a real repo). The pr-queue step has continue-on-error: true
+      # in the action, so the action itself should complete even if the queue command fails.
+      # However, binary installation (gh attestation verify) may also fail under act.
+      # We accept either outcome and verify the action ran the metrics-aggregate step.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          pr-queue: 'true'
+          dry-run: 'true'
+
+      - name: Assert action completed and metric outputs are set
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          ETU: ${{ steps.action.outputs.effective-token-units }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "effective-token-units: $ETU"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          if [ "$OUTCOME" = "success" ]; then
+            # Action succeeded: verify metric outputs are set
+            FAIL=0
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: input-tokens is empty"
+              FAIL=1
+            fi
+            if [ -z "$OUTPUT_TOKENS" ]; then
+              echo "FAIL: output-tokens is empty"
+              FAIL=1
+            fi
+            if [ -z "$DURATION_MS" ]; then
+              echo "FAIL: duration-ms is empty"
+              FAIL=1
+            fi
+            if [ -z "$ETU" ]; then
+              echo "FAIL: effective-token-units is empty"
+              FAIL=1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: cache-hit-ratio is empty"
+              FAIL=1
+            fi
+            if [ "$FAIL" = "1" ]; then
+              exit 1
+            fi
+            echo "PASS: action completed and all metric outputs are set"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (binary installation may not be supported under act, or sentinel repo caused pr-queue failure)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

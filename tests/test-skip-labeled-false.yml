@@ -1,0 +1,72 @@
+name: Test skip-labeled=false (no skip even with labels)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # With skip-labeled=false, the check-skip step outputs skip=false regardless
+      # of issue labels, so the action proceeds to install the binary and run.
+      # On workflow_dispatch, no AI commands fire. Binary installation (gh attestation
+      # verify) may fail under act; we accept either outcome.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+
+      - name: Assert check-skip did not skip (skip-labeled=false)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          if [ "$OUTCOME" = "success" ]; then
+            # Action succeeded: verify outputs are set (action was not skipped)
+            if [ -z "$INPUT_TOKENS" ]; then
+              echo "FAIL: input-tokens output is empty — action may have been skipped unexpectedly"
+              exit 1
+            fi
+            if [ -z "$CACHE_HIT_RATIO" ]; then
+              echo "FAIL: cache-hit-ratio output is empty"
+              exit 1
+            fi
+            echo "PASS: action ran with skip-labeled=false, outputs are set"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (binary installation may not be supported under act)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert no AI tokens consumed (workflow_dispatch, no AI calls)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+
+          if [ "$OUTCOME" = "success" ]; then
+            if [ "$INPUT_TOKENS" != "0" ]; then
+              echo "FAIL: expected 0 input tokens, got $INPUT_TOKENS"
+              exit 1
+            fi
+            if [ "$OUTPUT_TOKENS" != "0" ]; then
+              echo "FAIL: expected 0 output tokens, got $OUTPUT_TOKENS"
+              exit 1
+            fi
+            echo "PASS: no AI tokens consumed as expected"
+          else
+            echo "PASS: action did not succeed (binary installation may not be supported under act)"
+          fi

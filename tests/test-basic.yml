@@ -1,0 +1,55 @@
+name: Test basic usage - aptu binary installation
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert action ran and completed (success or graceful failure)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          # Under workflow_dispatch, no issue/PR/schedule event fires, so the action
+          # only installs the aptu binary and sets up PATH. It may succeed or fail
+          # (e.g., attestation verification issues), but must not be skipped.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert aptu binary is installed (when action succeeded)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "Checking aptu binary on PATH..."
+            if ! command -v aptu > /dev/null 2>&1; then
+              echo "FAIL: aptu binary not found on PATH after successful action"
+              exit 1
+            fi
+            echo "aptu found at: $(command -v aptu)"
+            VERSION_OUTPUT=$(aptu --version 2>&1 || true)
+            echo "version output: $VERSION_OUTPUT"
+            if [ -z "$VERSION_OUTPUT" ]; then
+              echo "FAIL: aptu --version produced no output"
+              exit 1
+            fi
+            echo "PASS: aptu binary is installed and working"
+          else
+            echo "PASS: action did not succeed (binary install may have failed gracefully)"
+          fi

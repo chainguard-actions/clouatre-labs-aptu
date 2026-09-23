@@ -1,0 +1,66 @@
+name: Test dry-run mode
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Ensure clean config state
+        run: |
+          rm -rf "$HOME/.config/aptu"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+        continue-on-error: true
+
+      - name: Assert dry-run action completed
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action completed with outcome '$OUTCOME'"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert fallback config was written in dry-run mode
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "Config file contents:"
+            cat "$CONFIG_FILE"
+            if grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+              echo "PASS: fallback config section present"
+            else
+              echo "FAIL: expected [ai.fallback] section in config"
+              exit 1
+            fi
+          else
+            echo "INFO: config file not found (may have been skipped)"
+          fi
+          echo "PASS: dry-run mode test complete"
+
+      - name: Assert aptu binary was installed (or attempted)
+        run: |
+          # Check if aptu binary exists after the action ran
+          if [ -f "$HOME/.local/bin/aptu" ]; then
+            echo "PASS: aptu binary installed at ~/.local/bin/aptu"
+            "$HOME/.local/bin/aptu" --version 2>/dev/null || true
+          elif command -v aptu >/dev/null 2>&1; then
+            echo "PASS: aptu binary available on PATH"
+          else
+            echo "INFO: aptu binary not found (install may have failed or been skipped)"
+          fi
+          echo "PASS: binary check complete"

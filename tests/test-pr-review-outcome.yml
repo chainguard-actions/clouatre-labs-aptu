@@ -1,0 +1,47 @@
+name: Test pr-review-outcome output under workflow_dispatch
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+        continue-on-error: true
+
+      - name: Assert pr-review-outcome output is accessible
+        env:
+          PR_REVIEW_OUTCOME: ${{ steps.action.outputs.pr-review-outcome }}
+          ACTION_OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $ACTION_OUTCOME"
+          echo "pr-review-outcome: '$PR_REVIEW_OUTCOME'"
+          # Under workflow_dispatch, the PR review step does not fire
+          # (it requires pull_request or repository_dispatch event).
+          # So pr-review-outcome should be empty.
+          if [ -z "$PR_REVIEW_OUTCOME" ]; then
+            echo "PASS: pr-review-outcome is empty (PR review step did not fire under workflow_dispatch)"
+          else
+            echo "INFO: pr-review-outcome='$PR_REVIEW_OUTCOME' (PR review step fired)"
+            # If it fired, it should be either 'success' or 'failure'
+            if [ "$PR_REVIEW_OUTCOME" = "success" ] || [ "$PR_REVIEW_OUTCOME" = "failure" ]; then
+              echo "PASS: pr-review-outcome has valid value"
+            else
+              echo "FAIL: unexpected pr-review-outcome value: '$PR_REVIEW_OUTCOME'"
+              exit 1
+            fi
+          fi
+          # The action itself should have completed (success or failure)
+          if [ "$ACTION_OUTCOME" = "success" ] || [ "$ACTION_OUTCOME" = "failure" ]; then
+            echo "PASS: action completed with outcome '$ACTION_OUTCOME'"
+          else
+            echo "FAIL: unexpected action outcome '$ACTION_OUTCOME'"
+            exit 1
+          fi

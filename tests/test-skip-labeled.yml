@@ -1,0 +1,80 @@
+name: Test skip-labeled behavior
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Call the action under test with skip-labeled=true and dry-run=true.
+      # Under workflow_dispatch, no issue/PR triage steps fire, so the action
+      # completes quickly after the check-skip and setup steps.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+          fallback-provider: ''
+          fallback-model: ''
+
+      - name: Assert action ran (check-skip logic executed)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # The action may succeed or fail (e.g. if aptu binary install fails in CI),
+          # but it must not be skipped — it must have actually run.
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action step was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action step ran (outcome=$OUTCOME)"
+
+      # Verify the check-skip logic independently with no labels (should not skip)
+      - name: Verify check-skip logic - no labels (should not skip)
+        env:
+          SKIP_LABELED: 'true'
+          ISSUE_LABELS: 'null'
+        run: |
+          HAS_TYPE=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(startswith("type:"))] | length > 0')
+          HAS_PRIORITY=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(test("^p[0-9]$"))] | length > 0')
+          echo "HAS_TYPE: $HAS_TYPE"
+          echo "HAS_PRIORITY: $HAS_PRIORITY"
+          if [ "$HAS_TYPE" = "true" ] && [ "$HAS_PRIORITY" = "true" ]; then
+            echo "FAIL: should not skip when no labels are present"
+            exit 1
+          fi
+          echo "PASS: skip=false correctly determined (no type/priority labels)"
+
+      # Verify the check-skip logic with both type and priority labels (should skip)
+      - name: Verify check-skip logic - both labels present (should skip)
+        run: |
+          ISSUE_LABELS='[{"name":"type:bug"},{"name":"p1"}]'
+          HAS_TYPE=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(startswith("type:"))] | length > 0')
+          HAS_PRIORITY=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(test("^p[0-9]$"))] | length > 0')
+          echo "HAS_TYPE: $HAS_TYPE"
+          echo "HAS_PRIORITY: $HAS_PRIORITY"
+          if [ "$HAS_TYPE" = "true" ] && [ "$HAS_PRIORITY" = "true" ]; then
+            echo "PASS: skip=true correctly determined (has type and priority labels)"
+          else
+            echo "FAIL: expected skip=true when both type and priority labels present"
+            exit 1
+          fi
+
+      # Verify the check-skip logic with only a type label (should not skip)
+      - name: Verify check-skip logic - only type label (should not skip)
+        run: |
+          ISSUE_LABELS='[{"name":"type:feature"}]'
+          HAS_TYPE=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(startswith("type:"))] | length > 0')
+          HAS_PRIORITY=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(test("^p[0-9]$"))] | length > 0')
+          echo "HAS_TYPE: $HAS_TYPE"
+          echo "HAS_PRIORITY: $HAS_PRIORITY"
+          if [ "$HAS_TYPE" = "true" ] && [ "$HAS_PRIORITY" = "true" ]; then
+            echo "FAIL: should not skip when only type label present (no priority)"
+            exit 1
+          fi
+          echo "PASS: skip=false correctly determined (missing priority label)"

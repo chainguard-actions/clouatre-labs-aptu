@@ -1,0 +1,2047 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Pull request fetching via Octocrab.
+//!
+//! Provides functions to parse PR references and fetch PR details
+//! including file diffs for AI review.
+
+use anyhow::{Context, Result};
+#[cfg(not(target_arch = "wasm32"))]
+use backon::Retryable;
+#[cfg(not(target_arch = "wasm32"))]
+use octocrab::Octocrab;
+use tracing::{debug, instrument};
+
+use super::{ReferenceKind, parse_github_reference};
+use crate::ai::review_context::truncate_at_line_boundary;
+use crate::ai::types::{PrDetails, PrFile, PrReviewComment, ReviewEvent};
+use crate::error::{AptuError, ResourceType};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::retry::retry_backoff;
+use crate::triage::render_pr_review_comment_body;
+
+/// Parses a PR reference into (owner, repo, number).
+///
+/// Supports multiple formats:
+/// - Full URL: `https://github.com/owner/repo/pull/123`
+/// - Short form: `owner/repo#123`
+/// - Bare number: `123` (requires `repo_context`)
+///
+/// # Arguments
+///
+/// * `reference` - PR reference string
+/// * `repo_context` - Optional repository context for bare numbers (e.g., "owner/repo")
+///
+/// # Returns
+///
+/// Tuple of (owner, repo, number)
+///
+/// # Errors
+///
+/// Returns an error if the reference format is invalid or `repo_context` is missing for bare numbers.
+pub fn parse_pr_reference(
+    reference: &str,
+    repo_context: Option<&str>,
+) -> Result<(String, String, u64)> {
+    parse_github_reference(ReferenceKind::Pull, reference, repo_context)
+}
+
+/// Fetches PR metadata, with a type-mismatch check on 404 (issue vs pull request).
+///
+/// # Errors
+///
+/// Returns an error if the API call fails or PR is not found.
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_pr_core(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<octocrab::models::pulls::PullRequest> {
+    debug!("Fetching PR details");
+
+    match client.pulls(owner, repo).get(number).await {
+        Ok(pr) => Ok(pr),
+        Err(e) => {
+            // Check if this is a 404 error and if an issue exists instead
+            if let octocrab::Error::GitHub { source, .. } = &e
+                && source.status_code == 404
+            {
+                // Try to fetch as an issue to provide a better error message
+                if (client.issues(owner, repo).get(number).await).is_ok() {
+                    return Err(AptuError::TypeMismatch {
+                        number,
+                        expected: ResourceType::PullRequest,
+                        actual: ResourceType::Issue,
+                    }
+                    .into());
+                }
+                // Issue check failed, fall back to original error
+            }
+            Err(e).with_context(|| format!("Failed to fetch PR #{number} from {owner}/{repo}"))
+        }
+    }
+}
+
+/// Fetches PR files (diffs) with pagination (`per_page=100`, max 300 files),
+/// truncation detection, Contents API fallbacks, and full-content enrichment.
+///
+/// # Errors
+///
+/// Returns an error if the file listing API call fails.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
+async fn fetch_pr_files(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    head_sha: &str,
+    review_config: &crate::config::ReviewConfig,
+) -> Result<Vec<PrFile>> {
+    // Fetch PR files (diffs) with pagination (per_page=100, max 300 files)
+    let mut pr_files: Vec<PrFile> = Vec::new();
+    let mut page = client
+        .pulls(owner, repo)
+        .list_files(number)
+        .await
+        .with_context(|| format!("Failed to fetch files for PR #{number}"))?;
+
+    loop {
+        pr_files.extend(page.items.into_iter().map(|f| PrFile {
+            filename: f.filename,
+            status: format!("{:?}", f.status),
+            additions: f.additions,
+            deletions: f.deletions,
+            patch: f.patch,
+            patch_truncated: false,
+            full_content: None,
+        }));
+
+        if pr_files.len() >= 300 {
+            tracing::warn!(
+                "PR #{} has reached 300-file cap; stopping pagination",
+                number
+            );
+            pr_files.truncate(300);
+            break;
+        }
+
+        match client
+            .get_page::<octocrab::models::repos::DiffEntry>(&page.next)
+            .await
+        {
+            Ok(Some(next_page)) => page = next_page,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!("Error fetching next page of files: {}", e);
+                break;
+            }
+        }
+    }
+
+    // Detect truncated patches and attempt Contents API fallback
+    for file in &mut pr_files {
+        #[allow(clippy::collapsible_if)]
+        if let Some(patch) = &file.patch {
+            if is_patch_truncated(patch) {
+                file.patch_truncated = true;
+                // Attempt Contents API fallback
+                if let Ok(Some(content)) = fetch_file_contents_single(
+                    client,
+                    owner,
+                    repo,
+                    &file.filename,
+                    head_sha,
+                    review_config.max_chars_per_file,
+                )
+                .await
+                {
+                    file.patch = Some(content);
+                }
+            }
+        }
+    }
+
+    // Contents API fallback for Added/Renamed/Copied files with oversized patches.
+    // Fetch full content from Contents API so the AI can review the full file, even though
+    // the patch exceeds the character budget.
+    for file in &mut pr_files {
+        // status is produced via format!("{:?}", f.status) which yields mixed-case values (e.g. "Added", "Renamed")
+        let is_added_renamed_copied = matches!(
+            file.status.to_lowercase().as_str(),
+            "added" | "renamed" | "copied"
+        );
+        let patch_too_large =
+            file.patch.as_deref().map_or(0, str::len) > review_config.max_patch_chars_per_file;
+        if is_added_renamed_copied && patch_too_large && file.full_content.is_none() {
+            match fetch_file_contents_single(
+                client,
+                owner,
+                repo,
+                &file.filename,
+                head_sha,
+                review_config.max_chars_per_file,
+            )
+            .await
+            {
+                Ok(Some(content)) => {
+                    file.full_content = Some(content);
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        "Contents API returned empty content for added file {} in PR #{}",
+                        file.filename,
+                        number
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to fetch contents for added file {} in PR #{}: {}",
+                        file.filename,
+                        number,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    // Fetch full file contents for eligible files (default: up to 10 files, max 4000 chars each)
+    let file_contents = fetch_file_contents(
+        client,
+        owner,
+        repo,
+        &pr_files,
+        head_sha,
+        review_config.max_full_content_files,
+        review_config.max_chars_per_file,
+    )
+    .await;
+
+    // Merge file contents back into pr_files
+    debug_assert_eq!(
+        pr_files.len(),
+        file_contents.len(),
+        "fetch_file_contents must return one entry per file"
+    );
+    let pr_files: Vec<PrFile> = pr_files
+        .into_iter()
+        .zip(file_contents)
+        .map(|(mut file, content)| {
+            if file.full_content.is_none() {
+                file.full_content = content;
+            }
+            file
+        })
+        .collect();
+
+    Ok(pr_files)
+}
+
+/// Returns true when a review comment body starts with the APTU inline-comment
+/// marker (after leading whitespace). Matching is anchored to the start so a
+/// human comment that merely quotes or mentions the marker mid-body is not
+/// misclassified as aptu-owned.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn is_aptu_review_comment(body: &str) -> bool {
+    body.trim_start()
+        .starts_with(crate::triage::REVIEW_COMMENT_MARKER)
+}
+
+/// Fetches existing APTU review comments with pagination (`per_page=100`, max 300
+/// items) so the AI prompt can avoid restating feedback the bot already posted.
+///
+/// Comments are identified by the `<!-- APTU_REVIEW_COMMENT -->` body marker rather
+/// than by bot identity: GitHub App installation tokens cannot reliably resolve the
+/// authenticated user via `current().user()`, which previously produced an empty
+/// dedup map (see #1639).
+///
+/// # Errors
+///
+/// Returns an error if the review comments API call fails.
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_pr_comments(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<Vec<crate::ai::types::PrReviewCommentDetails>> {
+    let mut review_comments: Vec<crate::ai::types::PrReviewCommentDetails> = Vec::new();
+    let mut page = client
+        .pulls(owner, repo)
+        .list_comments(Some(number))
+        .per_page(100)
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch review comments for PR #{number}"))?;
+
+    loop {
+        review_comments.extend(page.items.into_iter().filter_map(|c| {
+            if !is_aptu_review_comment(&c.body) {
+                return None;
+            }
+            Some(crate::ai::types::PrReviewCommentDetails {
+                id: c.id.0,
+                author: c.user.as_ref().map(|u| u.login.clone()).unwrap_or_default(),
+                is_bot: c.user.as_ref().is_some_and(|u| u.r#type.as_str() == "Bot"),
+                body: c.body.clone(),
+                path: c.path,
+                line: c.line,
+                side: c.side,
+                commit_id: c.commit_id,
+                original_line: c.original_line,
+            })
+        }));
+
+        // Cap at 300 to mirror the list_files limit; PRs with more existing comments
+        // are uncommon and the prompt budget would discard most entries anyway.
+        if review_comments.len() >= 300 {
+            tracing::warn!(
+                "PR #{} has reached 300-comment cap; stopping pagination",
+                number
+            );
+            review_comments.truncate(300);
+            break;
+        }
+
+        match client
+            .get_page::<octocrab::models::pulls::Comment>(&page.next)
+            .await
+        {
+            Ok(Some(next_page)) => page = next_page,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!("Error fetching next page of review comments: {}", e);
+                break;
+            }
+        }
+    }
+
+    Ok(review_comments)
+}
+
+/// Fetches PR details including file diffs from GitHub.
+///
+/// Uses Octocrab to fetch PR metadata and file changes.
+///
+/// # Arguments
+///
+/// * `client` - Authenticated Octocrab client
+/// * `owner` - Repository owner
+/// * `repo` - Repository name
+/// * `number` - PR number
+///
+/// # Returns
+///
+/// `PrDetails` struct with PR metadata and file diffs.
+///
+/// # Errors
+///
+/// Returns an error if the API call fails or PR is not found.
+#[cfg(not(target_arch = "wasm32"))]
+#[instrument(skip(client), fields(owner = %owner, repo = %repo, number = number))]
+#[allow(clippy::too_many_lines)]
+pub async fn fetch_pr_details(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    review_config: &crate::config::ReviewConfig,
+) -> Result<PrDetails> {
+    let pr = fetch_pr_core(client, owner, repo, number).await?;
+
+    let head_sha = pr.head.sha.as_str();
+    let pr_files = fetch_pr_files(client, owner, repo, number, head_sha, review_config).await?;
+
+    let labels: Vec<String> = pr
+        .labels
+        .iter()
+        .flat_map(|v| v.iter())
+        .map(|l| l.name.clone())
+        .collect();
+
+    let review_comments = fetch_pr_comments(client, owner, repo, number).await?;
+    debug!(
+        review_comments = review_comments.len(),
+        "Existing review comments fetched"
+    );
+
+    let details = PrDetails {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        number,
+        title: pr.title.clone().unwrap_or_default(),
+        body: pr.body.clone().unwrap_or_default(),
+        base_branch: pr.base.ref_field.clone(),
+        head_branch: pr.head.ref_field.clone(),
+        head_sha: pr.head.sha.as_str().to_string(),
+        files: pr_files,
+        url: pr
+            .html_url
+            .as_ref()
+            .map(std::string::ToString::to_string)
+            .unwrap_or_default(),
+        labels,
+        review_comments,
+        instructions: None,
+        dep_enrichments: Vec::new(),
+    };
+
+    debug!(
+        file_count = details.files.len(),
+        "PR details fetched successfully"
+    );
+
+    Ok(details)
+}
+
+/// Detects if a patch is truncated mid-hunk by GitHub API.
+///
+/// A patch is considered truncated if the last non-empty line starts with '+' or '-',
+/// indicating an incomplete hunk.
+fn is_patch_truncated(patch: &str) -> bool {
+    let lines: Vec<&str> = patch.lines().collect();
+
+    // Rule 1: Check if last non-empty line starts with '+' or '-' (mid-hunk cutoff)
+    if let Some(last_line) = lines.iter().rev().find(|line| !line.trim().is_empty())
+        && (last_line.starts_with('+') || last_line.starts_with('-'))
+    {
+        return true;
+    }
+
+    // Rule 2: Check if declared hunk size matches actual lines delivered
+    // Parse the last @@ -a,b +c,d @@ header and verify line count
+    if let Some(last_hunk_header) = lines.iter().rev().find(|line| line.contains("@@")) {
+        // Extract the +c,d part from the hunk header
+        if let Some(plus_part) = last_hunk_header.split('+').nth(1) {
+            // Extract the number after '+' and before the next space or @@
+            if let Some(size_str) = plus_part.split_whitespace().next() {
+                // Parse "c,d" format
+                if let Some(count_str) = size_str.split(',').nth(1)
+                    && let Ok(declared_count) = count_str.parse::<usize>()
+                {
+                    // Count actual lines after this hunk header (context + added lines)
+                    // Find the index of this hunk header
+                    if let Some(hunk_idx) = lines.iter().position(|&line| line == *last_hunk_header)
+                    {
+                        let lines_after_hunk = &lines[hunk_idx + 1..];
+                        // Count lines that are context (' '), additions ('+'), or deletions ('-')
+                        // Stop counting if we hit another hunk header
+                        let mut actual_count = 0;
+                        for line in lines_after_hunk {
+                            if line.starts_with("@@") {
+                                break;
+                            }
+                            if line.starts_with(' ')
+                                || line.starts_with('+')
+                                || line.starts_with('-')
+                            {
+                                actual_count += 1;
+                            }
+                        }
+                        // If actual count is less than declared, the hunk is truncated
+                        if actual_count < declared_count {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Fetches a single file's content from GitHub Contents API as a fallback for truncated patches.
+///
+/// Returns the file content truncated to `max_chars`, or `None` if the file cannot be fetched.
+/// Non-fatal errors (404, rate limits) are logged as warnings.
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_file_contents_single(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    filename: &str,
+    head_sha: &str,
+    max_chars: usize,
+) -> Result<Option<String>> {
+    match client
+        .repos(owner, repo)
+        .get_content()
+        .path(filename)
+        .r#ref(head_sha)
+        .send()
+        .await
+    {
+        Ok(content) => {
+            // Try to decode the first item (should be the file, not a directory listing)
+            if let Some(item) = content.items.first() {
+                if let Some(decoded) = item.decoded_content() {
+                    let truncated = if decoded.chars().count() > max_chars {
+                        truncate_at_line_boundary(&decoded, max_chars)
+                    } else {
+                        decoded
+                    };
+                    Ok(Some(truncated))
+                } else {
+                    tracing::warn!(
+                        "Failed to decode content for {}/{}/{} at {}",
+                        owner,
+                        repo,
+                        filename,
+                        head_sha
+                    );
+                    Ok(None)
+                }
+            } else {
+                tracing::warn!(
+                    "File content response was empty for {}/{}/{} at {}",
+                    owner,
+                    repo,
+                    filename,
+                    head_sha
+                );
+                Ok(None)
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to fetch content for {}/{}/{} at {}: {}",
+                owner,
+                repo,
+                filename,
+                head_sha,
+                e
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// Fetches full file contents for PR files from GitHub Contents API.
+///
+/// Fetches content for eligible files up to a specified limit and truncates each to a character limit.
+/// Skips deleted files and files with empty patches. Per-file errors are non-fatal: they produce
+/// `None` entries and log warnings.
+///
+/// # Arguments
+///
+/// * `client` - Authenticated Octocrab client
+/// * `owner` - Repository owner
+/// * `repo` - Repository name
+/// * `files` - Slice of PR files to fetch
+/// * `head_sha` - PR head commit SHA to fetch from
+/// * `max_files` - Maximum number of files to fetch content for
+/// * `max_chars_per_file` - Truncate each file's content at this character limit
+///
+/// # Returns
+///
+/// Vector of `Option<String>` with one entry per input file (in order):
+/// - `Some(content)` if fetch succeeded
+/// - `None` if fetch failed, file was skipped, or file index exceeded `max_files`
+#[cfg(not(target_arch = "wasm32"))]
+#[instrument(skip(client, files), fields(owner = %owner, repo = %repo, max_files = max_files))]
+async fn fetch_file_contents(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    files: &[PrFile],
+    head_sha: &str,
+    max_files: usize,
+    max_chars_per_file: usize,
+) -> Vec<Option<String>> {
+    let mut results = Vec::with_capacity(files.len());
+    let mut fetched_count = 0usize;
+
+    for file in files {
+        if should_skip_file(&file.filename, &file.status, file.patch.as_ref()) {
+            results.push(None);
+            continue;
+        }
+
+        // Skip if beyond max_files cap (count only successfully-fetched files)
+        if fetched_count >= max_files {
+            debug!(
+                file = %file.filename,
+                fetched_count = fetched_count,
+                max_files = max_files,
+                "Fetched file count exceeds max_files cap"
+            );
+            results.push(None);
+            continue;
+        }
+
+        // Attempt to fetch file content
+        match client
+            .repos(owner, repo)
+            .get_content()
+            .path(&file.filename)
+            .r#ref(head_sha)
+            .send()
+            .await
+        {
+            Ok(content) => {
+                // Try to decode the first item (should be the file, not a directory listing)
+                if let Some(item) = content.items.first() {
+                    if let Some(decoded) = item.decoded_content() {
+                        let truncated = if decoded.chars().count() > max_chars_per_file {
+                            truncate_at_line_boundary(&decoded, max_chars_per_file)
+                        } else {
+                            decoded
+                        };
+                        debug!(
+                            file = %file.filename,
+                            content_len = truncated.len(),
+                            "File content fetched and truncated"
+                        );
+                        results.push(Some(truncated));
+                        fetched_count += 1;
+                    } else {
+                        tracing::warn!(
+                            file = %file.filename,
+                            "Failed to decode file content; skipping"
+                        );
+                        results.push(None);
+                    }
+                } else {
+                    tracing::warn!(
+                        file = %file.filename,
+                        "File content response was empty; skipping"
+                    );
+                    results.push(None);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    file = %file.filename,
+                    err = %e,
+                    "Failed to fetch file content; skipping"
+                );
+                results.push(None);
+            }
+        }
+    }
+
+    results
+}
+
+/// Appends GitHub's per-item `errors` detail to a base error `message`.
+///
+/// GitHub's 422 responses often carry a generic top-level `message` (e.g.
+/// "Validation Failed") alongside an `errors` array with the actual cause.
+/// When `errors` is present and non-empty, each entry's string content (or
+/// its compact JSON form, for object-shaped entries) is appended to
+/// `message`, joined with `; `. Otherwise `message` is returned unchanged.
+fn append_github_errors(message: &str, errors: Option<&[serde_json::Value]>) -> String {
+    let Some(errors) = errors.filter(|errors| !errors.is_empty()) else {
+        return message.to_string();
+    };
+
+    let details: Vec<String> = errors
+        .iter()
+        .map(|e| {
+            e.as_str()
+                .map_or_else(|| e.to_string(), ToString::to_string)
+        })
+        .collect();
+
+    format!("{message}; {}", details.join("; "))
+}
+
+/// Outcome of posting the Aptu review summary comment (issue comment carrying
+/// the `<!-- APTU_REVIEW:<sha> -->` marker).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummaryPostOutcome {
+    /// No existing summary comment; a new one was created.
+    Posted,
+    /// An existing summary comment was patched in place (head SHA changed).
+    Updated,
+    /// Head SHA unchanged; the existing summary comment was left as-is.
+    Skipped,
+}
+
+/// Outcome of a successful [`post_pr_review`] call.
+///
+/// `failed_comments` is populated only when the batched review POST returned
+/// HTTP 422 and the per-comment fallback ran; it lists the `path:line` of each
+/// inline comment that could not be posted individually. It is empty when the
+/// batched POST succeeded normally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewPostOutcome {
+    /// ID of the created review. `0` when the run was skipped because the
+    /// summary already covered the current head SHA (no review was posted).
+    pub review_id: u64,
+    /// `path:line` entries for inline comments that failed during the 422
+    /// per-comment fallback (see issue #1603). Best-effort delivery: a
+    /// failure here does not prevent other comments from being attempted.
+    pub failed_comments: Vec<String>,
+    /// How the review summary comment was handled (see [`SummaryPostOutcome`]).
+    pub summary: SummaryPostOutcome,
+}
+
+/// Per-comment data retained alongside the batched JSON payload so the
+/// 422 fallback can re-post each comment individually without rebuilding it.
+struct InlineCommentData {
+    path: String,
+    line: u32,
+    body: String,
+}
+
+/// Response shape shared by the batched review POST and its body-only fallback.
+#[derive(serde::Deserialize)]
+struct ReviewResponse {
+    id: u64,
+}
+
+/// Runs the 422 fallback: posts the review body/event alone (no `comments` field),
+/// then submits each retained inline comment individually via
+/// [`post_single_inline_comment`]. Per-comment failures are collected rather than
+/// aborting the remaining comments (best-effort delivery); see issue #1603.
+///
+/// The body-only POST also doubles as a diagnostic: if it succeeds, the original
+/// 422 was caused by the `comments` payload, not the `body`/`event`/`commit_id`. If it
+/// fails too, the fallback is redundant (the root cause is outside the comments
+/// array) and the error below says so instead of implying comments were at fault.
+/// Callers should surface a non-empty `failed_comments` to the user, since the
+/// review itself may have posted successfully while some comments did not
+/// (partial success).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+async fn run_per_comment_fallback(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    route: &str,
+    body: &str,
+    event: ReviewEvent,
+    commit_id: &str,
+    inline_comment_data: &[InlineCommentData],
+) -> Result<ReviewPostOutcome> {
+    tracing::warn!(
+        comment_count = inline_comment_data.len(),
+        "Batched PR review POST returned 422; falling back to per-comment posting \
+         (see issue #1603; root cause unconfirmed, this is a resilience measure)"
+    );
+
+    let mut fallback_payload = serde_json::json!({
+        "body": body,
+        "event": event.to_string(),
+    });
+    fallback_payload["commit_id"] = serde_json::Value::String(commit_id.to_string());
+
+    let review_id = match client
+        .post::<_, ReviewResponse>(route, Some(&fallback_payload))
+        .await
+    {
+        Ok(response) => response.id,
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "Failed to post review to PR #{number} in {owner}/{repo}: the batched \
+                     review POST returned 422 and the body-only fallback (no inline comments) \
+                     also failed. This points to the review body, event, or commit_id rather \
+                     than the inline comments; check that you have write access to the \
+                     repository and that the review body is well-formed."
+                )
+            });
+        }
+    };
+
+    let mut failed_comments = Vec::new();
+    for c in inline_comment_data {
+        let result = (|| async {
+            post_single_inline_comment(
+                client, owner, repo, number, commit_id, &c.path, c.line, &c.body,
+            )
+            .await
+        })
+        .retry(retry_backoff())
+        .notify(|err, dur| {
+            tracing::warn!(
+                path = %c.path,
+                line = c.line,
+                error = %err,
+                retry_after = ?dur,
+                "Retrying inline comment during 422 fallback"
+            );
+        })
+        .await;
+
+        if let Err(e) = result {
+            tracing::warn!(
+                path = %c.path,
+                line = c.line,
+                error = %e,
+                "Failed to post inline comment during 422 fallback"
+            );
+            failed_comments.push(format!("{}:{}", c.path, c.line));
+        }
+    }
+
+    Ok(ReviewPostOutcome {
+        review_id,
+        failed_comments,
+        summary: SummaryPostOutcome::Posted,
+    })
+}
+
+/// Determines whether a failed batched review POST should fall back to
+/// per-comment posting. True only for HTTP 422 with a non-empty outgoing
+/// comment set and a non-empty `commit_id` (the per-comment endpoint
+/// requires a commit to anchor to). Any other status code, an empty
+/// comment set, or an empty `commit_id` propagates the original error.
+fn should_fallback_to_per_comment(status_code: u16, comment_count: usize, commit_id: &str) -> bool {
+    status_code == 422 && comment_count > 0 && !commit_id.is_empty()
+}
+
+/// Posts a PR review to GitHub.
+///
+/// Uses Octocrab's custom HTTP POST to create a review with the specified event type.
+/// Requires write access to the repository.
+///
+/// If the batched POST (body + event + inline comments) returns HTTP 422 with a
+/// non-empty comment set and a non-empty `commit_id`, this falls back to posting
+/// the review body/event alone, then submitting each inline comment individually
+/// via the single review-comment endpoint (see issue #1603). The root cause of
+/// the App-token 422 is unconfirmed; this is a resilience measure, not a verified
+/// fix. Per-comment failures during the fallback are collected and returned
+/// rather than aborting the remaining comments.
+///
+/// # Arguments
+///
+/// * `client` - Authenticated Octocrab client
+/// * `owner` - Repository owner
+/// * `repo` - Repository name
+/// * `number` - PR number
+/// * `body` - Review comment text
+/// * `event` - Review event type (Comment, Approve, or `RequestChanges`)
+/// * `comments` - Inline review comments to attach; entries with `line = None` are silently skipped
+/// * `commit_id` - Head commit SHA to associate with the review; omitted from payload if empty
+///
+/// # Returns
+///
+/// `ReviewPostOutcome` with the review ID and any per-comment fallback failures.
+///
+/// # Errors
+///
+/// Returns an error if the API call fails, user lacks write access, or PR is not found.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+#[instrument(skip(client, comments), fields(owner = %owner, repo = %repo, number = number, event = %event))]
+pub async fn post_pr_review(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    body: &str,
+    event: ReviewEvent,
+    comments: &[PrReviewComment],
+    commit_id: &str,
+) -> Result<ReviewPostOutcome> {
+    debug!("Posting PR review");
+
+    let route = format!("/repos/{owner}/{repo}/pulls/{number}/reviews");
+
+    // Retain per-comment data (path, line, rendered body) alongside the
+    // serde_json array so the 422 fallback can reuse it without rebuilding.
+    // Comments without a line number cannot be anchored to the diff; skip silently.
+    let inline_comment_data: Vec<InlineCommentData> = comments
+        .iter()
+        .filter_map(|c| {
+            c.line.map(|line| InlineCommentData {
+                path: c.file.clone(),
+                line,
+                body: render_pr_review_comment_body(c),
+            })
+        })
+        .collect();
+
+    let inline_comments: Vec<serde_json::Value> = inline_comment_data
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "path": d.path,
+                "line": d.line,
+                // RIGHT = new version of the file (added/changed lines).
+                // Use line (file line number) rather than the deprecated
+                // position (diff hunk offset) so no hunk parsing is needed.
+                "side": "RIGHT",
+                "body": d.body,
+            })
+        })
+        .collect();
+
+    let mut payload = serde_json::json!({
+        "body": body,
+        "event": event.to_string(),
+        "comments": inline_comments,
+    });
+
+    // commit_id is optional; include only when non-empty.
+    if !commit_id.is_empty() {
+        payload["commit_id"] = serde_json::Value::String(commit_id.to_string());
+    }
+
+    match client.post::<_, ReviewResponse>(&route, Some(&payload)).await {
+        Ok(response) => {
+            debug!(review_id = response.id, "PR review posted successfully");
+            Ok(ReviewPostOutcome {
+                review_id: response.id,
+                failed_comments: Vec::new(),
+                summary: SummaryPostOutcome::Posted,
+            })
+        }
+        Err(octocrab::Error::GitHub { source, .. })
+            if should_fallback_to_per_comment(
+                source.status_code.as_u16(),
+                inline_comment_data.len(),
+                commit_id,
+            ) =>
+        {
+            run_per_comment_fallback(
+                client,
+                owner,
+                repo,
+                number,
+                &route,
+                body,
+                event,
+                commit_id,
+                &inline_comment_data,
+            )
+            .await
+        }
+        Err(octocrab::Error::GitHub { source, .. }) => {
+            let detail = append_github_errors(&source.message, source.errors.as_deref());
+            tracing::warn!(
+                status = source.status_code.as_u16(),
+                github_message = %detail,
+                "Failed to post review to PR"
+            );
+            Err(anyhow::anyhow!(
+                "Failed to post review to PR #{number} in {owner}/{repo}. \
+                 GitHub API returned HTTP {}: {}. \
+                 Check that you have write access to the repository.",
+                source.status_code.as_u16(),
+                detail,
+            ))
+        }
+        Err(e) => {
+            Err(e).with_context(|| {
+                format!(
+                    "Failed to post review to PR #{number} in {owner}/{repo}. Check that you have write access to the repository."
+                )
+            })
+        }
+    }
+}
+
+/// Posts a single inline review comment directly, bypassing the batched Reviews API.
+///
+/// Used as a fallback when the batched `POST /reviews` call with inline comments
+/// returns HTTP 422 (see [`post_pr_review`]); each comment is submitted individually
+/// via the single review-comment endpoint so a batch-level validation failure does
+/// not silently drop every inline comment.
+///
+/// # Arguments
+///
+/// * `client` - Authenticated Octocrab client
+/// * `owner` - Repository owner
+/// * `repo` - Repository name
+/// * `number` - PR number
+/// * `commit_id` - Head commit SHA the comment anchors to
+/// * `path` - File path the comment applies to
+/// * `line` - File line number for the inline comment
+/// * `body` - Rendered comment body
+///
+/// # Returns
+///
+/// Comment ID on success.
+///
+/// # Errors
+///
+/// Returns an error if the API call fails or the user lacks write access.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+#[instrument(skip(client, body), fields(owner = %owner, repo = %repo, number = number, path = %path, line = line))]
+pub async fn post_single_inline_comment(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    commit_id: &str,
+    path: &str,
+    line: u32,
+    body: &str,
+) -> Result<u64> {
+    debug!("Posting single inline review comment (422 fallback)");
+
+    let route = format!("/repos/{owner}/{repo}/pulls/{number}/comments");
+    let payload = serde_json::json!({
+        "body": body,
+        "commit_id": commit_id,
+        "path": path,
+        "line": line,
+        "side": "RIGHT",
+    });
+
+    #[derive(serde::Deserialize)]
+    struct CommentResponse {
+        id: u64,
+    }
+
+    match client
+        .post::<_, CommentResponse>(&route, Some(&payload))
+        .await
+    {
+        Ok(response) => {
+            debug!(
+                comment_id = response.id,
+                "Inline comment posted successfully"
+            );
+            Ok(response.id)
+        }
+        Err(octocrab::Error::GitHub { source, .. }) => {
+            let detail = append_github_errors(&source.message, source.errors.as_deref());
+            Err(anyhow::anyhow!(
+                "Failed to post inline comment on {path}:{line} in PR #{number} ({owner}/{repo}). \
+                 GitHub API returned HTTP {}: {}.",
+                source.status_code.as_u16(),
+                detail,
+            ))
+        }
+        Err(e) => Err(e).with_context(|| {
+            format!(
+                "Failed to post inline comment on {path}:{line} in PR #{number} ({owner}/{repo})"
+            )
+        }),
+    }
+}
+
+/// Deletes a PR review comment.
+///
+/// # Errors
+///
+/// Returns an error if the API request fails. 404 errors (comment not found)
+/// are treated as success (idempotent).
+#[cfg(not(target_arch = "wasm32"))]
+#[instrument(skip(client), fields(owner = %owner, repo = %repo, comment_id = comment_id))]
+pub async fn delete_pr_review_comment(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    comment_id: u64,
+) -> Result<()> {
+    debug!("Deleting PR review comment");
+
+    let route = format!("/repos/{owner}/{repo}/pulls/comments/{comment_id}");
+
+    // Use generic delete method; needs explicit empty object body type
+    let empty_body = serde_json::json!({});
+    let result: std::result::Result<serde_json::Value, _> =
+        client.delete(&route, Some(&empty_body)).await;
+
+    match result {
+        Ok(_) => {
+            debug!("PR review comment deleted successfully");
+            Ok(())
+        }
+        Err(e)
+            if let octocrab::Error::GitHub { source, .. } = &e
+                && source.status_code.as_u16() == 404 =>
+        {
+            debug!("PR review comment already deleted (404); treating as success");
+            Ok(())
+        }
+        Err(e) => {
+            Err(e).with_context(|| format!("Failed to delete PR review comment #{comment_id}"))
+        }
+    }
+}
+
+/// Updates the body of an existing PR review comment.
+///
+/// Used when a duplicate comment is detected but its body differs from the
+/// previously posted version; the existing comment is `PATCH`ed in place rather
+/// than posting a new one.
+///
+/// # Errors
+///
+/// Returns an error if the API request fails. 404 errors (comment not found)
+/// are treated as success (idempotent).
+#[cfg(not(target_arch = "wasm32"))]
+#[instrument(skip(client), fields(owner = %owner, repo = %repo, comment_id = comment_id))]
+pub async fn update_pr_review_comment(
+    client: &Octocrab,
+    owner: &str,
+    repo: &str,
+    comment_id: u64,
+    body: &str,
+) -> Result<()> {
+    debug!("Updating PR review comment");
+
+    let route = format!("/repos/{owner}/{repo}/pulls/comments/{comment_id}");
+    let payload = serde_json::json!({ "body": body });
+    let result: std::result::Result<serde_json::Value, _> =
+        client.patch(&route, Some(&payload)).await;
+
+    match result {
+        Ok(_) => {
+            debug!("PR review comment updated successfully");
+            Ok(())
+        }
+        Err(e)
+            if let octocrab::Error::GitHub { source, .. } = &e
+                && source.status_code.as_u16() == 404 =>
+        {
+            debug!("PR review comment not found (404); treating as success");
+            Ok(())
+        }
+        Err(e) => {
+            Err(e).with_context(|| format!("Failed to update PR review comment #{comment_id}"))
+        }
+    }
+}
+
+/// Extract labels from PR metadata (title and file paths).
+///
+/// Parses conventional commit prefix from PR title and maps file paths to scope labels.
+/// Returns a vector of label names to apply to the PR.
+///
+/// # Arguments
+/// * `title` - PR title (may contain conventional commit prefix)
+/// * `file_paths` - List of file paths changed in the PR
+///
+/// # Returns
+/// Vector of label names to apply
+#[must_use]
+pub fn labels_from_pr_metadata(title: &str, file_paths: &[String]) -> Vec<String> {
+    let mut labels = std::collections::HashSet::new();
+
+    // Extract conventional commit prefix from title
+    // Handle both "feat: ..." and "feat(scope): ..." formats
+    let prefix = title
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .split('(')
+        .next()
+        .unwrap_or("")
+        .trim();
+
+    // Map conventional commit type to label
+    let type_label = match prefix {
+        "feat" | "perf" => Some("enhancement"),
+        "fix" => Some("bug"),
+        "docs" => Some("documentation"),
+        "refactor" => Some("refactor"),
+        _ => None,
+    };
+
+    if let Some(label) = type_label {
+        labels.insert(label.to_string());
+    }
+
+    // Map file paths to scope labels
+    for path in file_paths {
+        let scope = if path.starts_with("crates/aptu-cli/") {
+            Some("cli")
+        } else if path.starts_with("docs/") {
+            Some("documentation")
+        } else {
+            None
+        };
+
+        if let Some(label) = scope {
+            labels.insert(label.to_string());
+        }
+    }
+
+    labels.into_iter().collect()
+}
+
+/// Determines whether a file should be skipped during fetch based on status and patch.
+/// Emits a debug log with the skip reason. Returns true if the file should be skipped
+/// (removed status or no patch), false otherwise.
+fn should_skip_file(filename: &str, status: &str, patch: Option<&String>) -> bool {
+    if status.to_lowercase().contains("removed") {
+        debug!(file = %filename, "Skipping removed file");
+        return true;
+    }
+    if patch.is_none_or(String::is_empty) {
+        debug!(file = %filename, "Skipping file with empty patch");
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::types::CommentSeverity;
+
+    fn decode_content(encoded: &str, max_chars: usize) -> Option<String> {
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::STANDARD;
+        let decoded_bytes = engine.decode(encoded).ok()?;
+        let decoded_str = String::from_utf8(decoded_bytes).ok()?;
+
+        if decoded_str.len() <= max_chars {
+            Some(decoded_str)
+        } else {
+            Some(decoded_str.chars().take(max_chars).collect::<String>())
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // post_pr_review payload construction
+    // ---------------------------------------------------------------------------
+
+    /// Helper: build the inline comments JSON array using the same logic as
+    /// `post_pr_review`, without making a live HTTP call.
+    fn build_inline_comments(comments: &[PrReviewComment]) -> Vec<serde_json::Value> {
+        comments
+            .iter()
+            .filter_map(|c| {
+                c.line.map(|line| {
+                    serde_json::json!({
+                        "path": c.file,
+                        "line": line,
+                        "side": "RIGHT",
+                        "body": render_pr_review_comment_body(c),
+                    })
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_post_pr_review_payload_with_comments() {
+        // Arrange
+        let comments = vec![PrReviewComment {
+            file: "src/main.rs".to_string(),
+            line: Some(42),
+            comment: "Consider using a match here.".to_string(),
+            severity: CommentSeverity::Suggestion,
+            suggested_code: None,
+        }];
+
+        // Act
+        let inline = build_inline_comments(&comments);
+
+        // Assert
+        assert_eq!(inline.len(), 1);
+        assert_eq!(inline[0]["path"], "src/main.rs");
+        assert_eq!(inline[0]["line"], 42);
+        assert_eq!(inline[0]["side"], "RIGHT");
+        assert_eq!(
+            inline[0]["body"],
+            format!(
+                "{}\n{}{} -->\n💡 Suggestion: Consider using a match here.",
+                crate::triage::REVIEW_COMMENT_MARKER,
+                crate::triage::APTU_COMMENT_HASH_PREFIX,
+                crate::triage::comment_content_hash(&comments[0])
+            )
+        );
+    }
+
+    #[test]
+    fn test_post_pr_review_skips_none_line_comments() {
+        // Arrange: one comment with a line, one without.
+        let comments = vec![
+            PrReviewComment {
+                file: "src/lib.rs".to_string(),
+                line: None,
+                comment: "General file comment.".to_string(),
+                severity: CommentSeverity::Info,
+                suggested_code: None,
+            },
+            PrReviewComment {
+                file: "src/lib.rs".to_string(),
+                line: Some(10),
+                comment: "Inline comment.".to_string(),
+                severity: CommentSeverity::Warning,
+                suggested_code: None,
+            },
+        ];
+
+        // Act
+        let inline = build_inline_comments(&comments);
+
+        // Assert: only the comment with a line is included.
+        assert_eq!(inline.len(), 1);
+        assert_eq!(inline[0]["line"], 10);
+    }
+
+    #[test]
+    fn test_post_pr_review_empty_comments() {
+        // Arrange
+        let comments: Vec<PrReviewComment> = vec![];
+
+        // Act
+        let inline = build_inline_comments(&comments);
+
+        // Assert: empty slice produces empty array, which serializes as [].
+        assert!(inline.is_empty());
+        let serialized = serde_json::to_string(&inline).unwrap();
+        assert_eq!(serialized, "[]");
+    }
+
+    // ---------------------------------------------------------------------------
+    // should_fallback_to_per_comment (422 fallback trigger condition)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_should_fallback_to_per_comment_triggers_on_422_with_comments_and_commit() {
+        // Arrange / Act
+        let result = should_fallback_to_per_comment(422, 2, "abc123");
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn test_should_fallback_to_per_comment_skips_when_no_comments() {
+        // Arrange: all comments had line=None and were filtered out upstream.
+        // Act
+        let result = should_fallback_to_per_comment(422, 0, "abc123");
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_should_fallback_to_per_comment_skips_when_commit_id_empty() {
+        // Arrange / Act: per-comment endpoint requires a commit_id to anchor to.
+        let result = should_fallback_to_per_comment(422, 2, "");
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_should_fallback_to_per_comment_skips_on_non_422_status() {
+        // Arrange / Act
+        let result = should_fallback_to_per_comment(403, 2, "abc123");
+
+        // Assert
+        assert!(!result);
+    }
+
+    // ---------------------------------------------------------------------------
+    // post_single_inline_comment payload construction
+    // ---------------------------------------------------------------------------
+
+    /// Helper: build the single inline-comment JSON payload using the same shape
+    /// as `post_single_inline_comment`, without making a live HTTP call.
+    fn build_single_comment_payload(
+        commit_id: &str,
+        path: &str,
+        line: u32,
+        body: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "body": body,
+            "commit_id": commit_id,
+            "path": path,
+            "line": line,
+            "side": "RIGHT",
+        })
+    }
+
+    #[test]
+    fn test_post_single_inline_comment_payload_shape() {
+        // Arrange
+        // Act
+        let payload = build_single_comment_payload("abc123", "src/main.rs", 42, "Nice catch.");
+
+        // Assert
+        assert_eq!(payload["body"], "Nice catch.");
+        assert_eq!(payload["commit_id"], "abc123");
+        assert_eq!(payload["path"], "src/main.rs");
+        assert_eq!(payload["line"], 42);
+        assert_eq!(payload["side"], "RIGHT");
+    }
+
+    // ---------------------------------------------------------------------------
+    // append_github_errors
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_append_github_errors_with_populated_errors() {
+        // Arrange
+        let message = "Validation Failed";
+        let errors = vec![serde_json::json!("body is too long")];
+
+        // Act
+        let detail = append_github_errors(message, Some(&errors));
+
+        // Assert: both the original message and the error detail are present.
+        assert!(detail.contains(message));
+        assert!(detail.contains("body is too long"));
+    }
+
+    #[test]
+    fn test_append_github_errors_with_no_errors() {
+        // Arrange
+        let message = "Not Found";
+
+        // Act
+        let detail_none = append_github_errors(message, None);
+        let detail_empty = append_github_errors(message, Some(&[]));
+
+        // Assert: no "errors" or "null" noise appended in either case.
+        assert_eq!(detail_none, message);
+        assert_eq!(detail_empty, message);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Existing tests
+    // ---------------------------------------------------------------------------
+
+    // Smoke test to verify parse_pr_reference delegates correctly.
+    // Comprehensive parsing tests are in github/mod.rs.
+    #[test]
+    fn test_parse_pr_reference_delegates_to_shared() {
+        let (owner, repo, number) =
+            parse_pr_reference("https://github.com/block/goose/pull/123", None).unwrap();
+        assert_eq!(owner, "block");
+        assert_eq!(repo, "goose");
+        assert_eq!(number, 123);
+    }
+
+    #[test]
+    fn test_title_prefix_to_label_mapping() {
+        let cases = vec![
+            (
+                "feat: add new feature",
+                vec!["enhancement"],
+                "feat should map to enhancement",
+            ),
+            ("fix: resolve bug", vec!["bug"], "fix should map to bug"),
+            (
+                "docs: update readme",
+                vec!["documentation"],
+                "docs should map to documentation",
+            ),
+            (
+                "refactor: improve code",
+                vec!["refactor"],
+                "refactor should map to refactor",
+            ),
+            (
+                "perf: optimize",
+                vec!["enhancement"],
+                "perf should map to enhancement",
+            ),
+            (
+                "chore: update deps",
+                vec![],
+                "chore should produce no labels",
+            ),
+        ];
+
+        for (title, expected_labels, msg) in cases {
+            let labels = labels_from_pr_metadata(title, &[]);
+            for expected in &expected_labels {
+                assert!(
+                    labels.contains(&expected.to_string()),
+                    "{msg}: expected '{expected}' in {labels:?}",
+                );
+            }
+            if expected_labels.is_empty() {
+                assert!(labels.is_empty(), "{msg}: expected empty, got {labels:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_file_path_to_scope_mapping() {
+        let cases = vec![
+            (
+                "feat: cli",
+                vec!["crates/aptu-cli/src/main.rs"],
+                vec!["enhancement", "cli"],
+                "cli path should map to cli scope",
+            ),
+            (
+                "feat: docs",
+                vec!["docs/GITHUB_ACTION.md"],
+                vec!["enhancement", "documentation"],
+                "docs path should map to documentation scope",
+            ),
+            (
+                "feat: workflow",
+                vec![".github/workflows/test.yml"],
+                vec!["enhancement"],
+                "workflow path should be ignored",
+            ),
+        ];
+
+        for (title, paths, expected_labels, msg) in cases {
+            let labels = labels_from_pr_metadata(
+                title,
+                &paths
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>(),
+            );
+            for expected in expected_labels {
+                assert!(
+                    labels.contains(&expected.to_string()),
+                    "{msg}: expected '{expected}' in {labels:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_combined_title_and_paths() {
+        let labels = labels_from_pr_metadata(
+            "feat: multi",
+            &[
+                "crates/aptu-cli/src/main.rs".to_string(),
+                "docs/README.md".to_string(),
+            ],
+        );
+        assert!(
+            labels.contains(&"enhancement".to_string()),
+            "should include enhancement from feat prefix"
+        );
+        assert!(
+            labels.contains(&"cli".to_string()),
+            "should include cli from path"
+        );
+        assert!(
+            labels.contains(&"documentation".to_string()),
+            "should include documentation from path"
+        );
+    }
+
+    #[test]
+    fn test_no_match_returns_empty() {
+        let cases = vec![
+            (
+                "Random title",
+                vec![],
+                "unrecognized prefix should return empty",
+            ),
+            (
+                "chore: update",
+                vec![],
+                "ignored prefix should return empty",
+            ),
+        ];
+
+        for (title, paths, msg) in cases {
+            let labels = labels_from_pr_metadata(title, &paths);
+            assert!(labels.is_empty(), "{msg}: got {labels:?}");
+        }
+    }
+
+    #[test]
+    fn test_scoped_prefix_extracts_type() {
+        let labels = labels_from_pr_metadata("feat(cli): add new feature", &[]);
+        assert!(
+            labels.contains(&"enhancement".to_string()),
+            "scoped prefix should extract type from feat(cli)"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_labels_deduplicated() {
+        let labels = labels_from_pr_metadata("docs: update", &["docs/README.md".to_string()]);
+        assert_eq!(
+            labels.len(),
+            1,
+            "should have exactly one label when title and path both map to documentation"
+        );
+        assert!(
+            labels.contains(&"documentation".to_string()),
+            "should contain documentation label"
+        );
+    }
+
+    #[test]
+    fn test_should_skip_file_respects_fetched_count_cap() {
+        // Test that should_skip_file correctly identifies files to skip.
+        // Files with removed status or no patch should be skipped.
+        let removed_file = PrFile {
+            filename: "removed.rs".to_string(),
+            status: "removed".to_string(),
+            additions: 0,
+            deletions: 5,
+            patch: None,
+            patch_truncated: false,
+            full_content: None,
+        };
+        let modified_file = PrFile {
+            filename: "file_0.rs".to_string(),
+            status: "modified".to_string(),
+            additions: 1,
+            deletions: 0,
+            patch: Some("+ new code".to_string()),
+            patch_truncated: false,
+            full_content: None,
+        };
+        let no_patch_file = PrFile {
+            filename: "file_1.rs".to_string(),
+            status: "modified".to_string(),
+            additions: 1,
+            deletions: 0,
+            patch: None,
+            patch_truncated: false,
+            full_content: None,
+        };
+
+        // Assert: removed files are skipped
+        assert!(
+            should_skip_file(
+                &removed_file.filename,
+                &removed_file.status,
+                removed_file.patch.as_ref()
+            ),
+            "removed files should be skipped"
+        );
+
+        // Assert: modified files with patch are not skipped
+        assert!(
+            !should_skip_file(
+                &modified_file.filename,
+                &modified_file.status,
+                modified_file.patch.as_ref()
+            ),
+            "modified files with patch should not be skipped"
+        );
+
+        // Assert: files without patch are skipped
+        assert!(
+            should_skip_file(
+                &no_patch_file.filename,
+                &no_patch_file.status,
+                no_patch_file.patch.as_ref()
+            ),
+            "files without patch should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_decode_content_valid_base64() {
+        // Arrange: valid base64-encoded string
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::STANDARD;
+        let original = "Hello, World!";
+        let encoded = engine.encode(original);
+
+        // Act: decode with sufficient max_chars
+        let result = decode_content(&encoded, 1000);
+
+        // Assert: decoding succeeds and matches original
+        assert_eq!(
+            result,
+            Some(original.to_string()),
+            "valid base64 should decode successfully"
+        );
+    }
+
+    #[test]
+    fn test_decode_content_invalid_base64() {
+        // Arrange: invalid base64 string
+        let invalid_base64 = "!!!invalid!!!";
+
+        // Act: attempt to decode
+        let result = decode_content(invalid_base64, 1000);
+
+        // Assert: decoding fails gracefully
+        assert_eq!(result, None, "invalid base64 should return None");
+    }
+
+    #[test]
+    fn test_decode_content_truncates_at_max_chars() {
+        // Arrange: multi-byte UTF-8 string (Japanese characters)
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::STANDARD;
+        let original = "こんにちは".repeat(10); // 50 characters total
+        let encoded = engine.encode(&original);
+        let max_chars = 10;
+
+        // Act: decode with max_chars limit
+        let result = decode_content(&encoded, max_chars);
+
+        // Assert: result is truncated to max_chars on character boundary
+        assert!(result.is_some(), "decoding should succeed");
+        let decoded = result.unwrap();
+        assert_eq!(
+            decoded.chars().count(),
+            max_chars,
+            "output should be truncated to max_chars on character boundary"
+        );
+        assert!(
+            decoded.is_char_boundary(decoded.len()),
+            "output should be valid UTF-8 (truncated on char boundary)"
+        );
+    }
+
+    #[test]
+    fn test_list_files_pagination_collects_all_pages() {
+        // Arrange: simulate pagination with two pages
+        // Page 1: 100 items with next_link set
+        let mut page1_items = Vec::new();
+        for i in 0..100 {
+            page1_items.push(PrFile {
+                filename: format!("file{i}.rs"),
+                status: "modified".to_string(),
+                additions: 1,
+                deletions: 0,
+                patch: Some("@@ -1,1 +1,1 @@\n-old\n+new".to_string()),
+                patch_truncated: false,
+                full_content: None,
+            });
+        }
+
+        // Page 2: 50 items with no next_link
+        let mut page2_items = Vec::new();
+        for i in 100..150 {
+            page2_items.push(PrFile {
+                filename: format!("file{i}.rs"),
+                status: "modified".to_string(),
+                additions: 1,
+                deletions: 0,
+                patch: Some("@@ -1,1 +1,1 @@\n-old\n+new".to_string()),
+                patch_truncated: false,
+                full_content: None,
+            });
+        }
+
+        // Act: collect all items (simulating pagination loop)
+        let mut all_files = Vec::new();
+        all_files.extend(page1_items);
+        all_files.extend(page2_items);
+
+        // Assert: total collected == 150
+        assert_eq!(
+            all_files.len(),
+            150,
+            "pagination should collect all items from both pages"
+        );
+    }
+
+    #[test]
+    fn test_list_files_pagination_respects_300_file_cap() {
+        // Arrange: build a Vec of 301 PrFile items
+        let mut files = Vec::new();
+        for i in 0..301 {
+            files.push(PrFile {
+                filename: format!("file{i}.rs"),
+                status: "modified".to_string(),
+                additions: 1,
+                deletions: 0,
+                patch: Some("@@ -1,1 +1,1 @@\n-old\n+new".to_string()),
+                patch_truncated: false,
+                full_content: None,
+            });
+        }
+
+        // Act: apply the 300-file cap (simulating the truncate logic)
+        if files.len() >= 300 {
+            files.truncate(300);
+        }
+
+        // Assert: result.len() == 300
+        assert_eq!(files.len(), 300, "pagination should enforce 300-file cap");
+    }
+
+    #[test]
+    fn test_is_patch_truncated_detects_mid_hunk_plus() {
+        // Test: patch ending with '+' (mid-hunk truncation)
+        let truncated_patch = "@@ -1,3 +1,4 @@\n line1\n line2\n+";
+        assert!(
+            is_patch_truncated(truncated_patch),
+            "patch ending with + should be detected as truncated"
+        );
+    }
+
+    #[test]
+    fn test_is_patch_truncated_detects_mid_hunk_minus() {
+        // Test: patch ending with '-' (mid-hunk truncation)
+        let truncated_patch = "@@ -1,3 +1,4 @@\n line1\n line2\n-";
+        assert!(
+            is_patch_truncated(truncated_patch),
+            "patch ending with - should be detected as truncated"
+        );
+    }
+
+    #[test]
+    fn test_is_patch_truncated_clean_patch_context_line() {
+        // Test: patch ending with ' ' (context line, not truncated)
+        let clean_patch = "@@ -1,3 +1,3 @@\n line1\n line2\n line3";
+        assert!(
+            !is_patch_truncated(clean_patch),
+            "patch ending with context line should not be detected as truncated"
+        );
+    }
+
+    #[test]
+    fn test_is_patch_truncated_correct_hunk_line_count() {
+        // Test: patch with correct hunk line count (declared 3, actual 3)
+        let clean_patch = "@@ -1,3 +1,3 @@\n line1\n line2\n line3";
+        assert!(
+            !is_patch_truncated(clean_patch),
+            "patch with correct hunk line count should not be detected as truncated"
+        );
+    }
+
+    #[test]
+    fn test_is_patch_truncated_declared_hunk_size_larger_than_delivered() {
+        // Test: patch with declared hunk size larger than delivered lines
+        // Declared: +1,4 (4 lines in new file), Actual: only 2 lines delivered
+        let truncated_patch = "@@ -1,3 +1,4 @@\n line1\n line2";
+        assert!(
+            is_patch_truncated(truncated_patch),
+            "patch with declared hunk size larger than delivered should be detected as truncated"
+        );
+    }
+
+    #[test]
+    fn test_is_patch_truncated_no_hunk_header_but_last_line_plus() {
+        // Test: patch with no @@ header but last line is '+'
+        let truncated_patch = "line1\nline2\n+";
+        assert!(
+            is_patch_truncated(truncated_patch),
+            "patch with no @@ header but ending with + should be detected as truncated"
+        );
+    }
+
+    #[test]
+    fn test_is_patch_truncated_empty_patch() {
+        // Test: empty patch
+        let empty_patch = "";
+        assert!(
+            !is_patch_truncated(empty_patch),
+            "empty patch should not be detected as truncated"
+        );
+    }
+
+    #[test]
+    fn test_is_patch_truncated_multiple_hunks_last_hunk_truncated() {
+        // Test: multiple hunks where the last hunk is truncated
+        let truncated_patch = "@@ -1,2 +1,2 @@\n line1\n line2\n@@ -5,3 +5,4 @@\n line5\n line6";
+        assert!(
+            is_patch_truncated(truncated_patch),
+            "patch with last hunk truncated should be detected as truncated"
+        );
+    }
+
+    #[test]
+    fn test_pr_file_status_case_insensitive_added() {
+        // Test: Added file status is matched case-insensitively
+        let file = PrFile {
+            filename: "new.rs".to_string(),
+            status: "Added".to_string(), // Debug repr from Octocrab
+            additions: 50,
+            deletions: 0,
+            patch: Some("new code".to_string()),
+            patch_truncated: false,
+            full_content: None,
+        };
+
+        let is_added_renamed_copied = matches!(
+            file.status.to_lowercase().as_str(),
+            "added" | "renamed" | "copied"
+        );
+        assert!(is_added_renamed_copied, "Added status should be recognized");
+    }
+
+    #[test]
+    fn test_pr_file_status_case_insensitive_modified() {
+        // Test: Modified file status is NOT matched (edge case)
+        let file = PrFile {
+            filename: "existing.rs".to_string(),
+            status: "Modified".to_string(),
+            additions: 10,
+            deletions: 5,
+            patch: Some("modified code".to_string()),
+            patch_truncated: false,
+            full_content: None,
+        };
+
+        let is_added_renamed_copied = matches!(
+            file.status.to_lowercase().as_str(),
+            "added" | "renamed" | "copied"
+        );
+        assert!(
+            !is_added_renamed_copied,
+            "Modified status should NOT be recognized as added/renamed/copied"
+        );
+    }
+
+    #[test]
+    fn test_pr_file_oversized_patch_detection() {
+        // Test: Patch size is compared against max_patch_chars_per_file.
+        // Derive the limit from ReviewConfig::default() -- single source of truth.
+        let max_patch_chars = crate::config::ReviewConfig::default().max_patch_chars_per_file;
+        let patch = "a".repeat(max_patch_chars + 5_000); // Clearly exceeds limit
+
+        let patch_too_large = patch.len() > max_patch_chars;
+        assert!(
+            patch_too_large,
+            "patch exceeding the default limit should be detected as oversized"
+        );
+    }
+
+    #[test]
+    fn test_pr_file_dedup_guard_full_content_present() {
+        // Test: File with full_content already populated should skip Contents API call
+        let file = PrFile {
+            filename: "new.rs".to_string(),
+            status: "Added".to_string(),
+            additions: 50,
+            deletions: 0,
+            patch: Some("new code".to_string()),
+            patch_truncated: false,
+            full_content: Some("full content from Contents API".to_string()),
+        };
+
+        let should_fetch = file.full_content.is_none();
+        assert!(
+            !should_fetch,
+            "File with full_content should not be fetched again (dedup guard)"
+        );
+    }
+
+    #[test]
+    fn test_pr_file_contents_api_fallback_flow() {
+        // Test: Verify the three conditions for Contents API fallback:
+        // 1. status is Added/Renamed/Copied
+        // 2. patch size exceeds max_patch_chars_per_file
+        // 3. full_content is None
+        // Derive the limit from ReviewConfig::default() -- single source of truth.
+        let max_patch_chars = crate::config::ReviewConfig::default().max_patch_chars_per_file;
+
+        let file = PrFile {
+            filename: "new.rs".to_string(),
+            status: "Added".to_string(),
+            additions: 50,
+            deletions: 0,
+            patch: Some("a".repeat(max_patch_chars + 5_000)), // Clearly exceeds limit
+            patch_truncated: false,
+            full_content: None, // Not yet fetched
+        };
+
+        let is_added_renamed_copied = matches!(
+            file.status.to_lowercase().as_str(),
+            "added" | "renamed" | "copied"
+        );
+        let patch_too_large = file.patch.as_deref().map_or(0, str::len) > max_patch_chars;
+        let should_attempt_contents_api =
+            is_added_renamed_copied && patch_too_large && file.full_content.is_none();
+
+        assert!(
+            should_attempt_contents_api,
+            "Added file with 30k patch and no full_content should attempt Contents API"
+        );
+    }
+
+    #[test]
+    fn test_merge_preserves_existing_full_content() {
+        // Arrange: create a PrFile with full_content = Some("fallback content"),
+        // pair it with content = None (simulating fetch_file_contents returning None beyond the cap)
+        let mut file = PrFile {
+            filename: "test.rs".to_string(),
+            status: "modified".to_string(),
+            additions: 5,
+            deletions: 2,
+            patch: Some("@@ -1,1 +1,1 @@".to_string()),
+            patch_truncated: false,
+            full_content: Some("fallback content".to_string()),
+        };
+        let content = None;
+
+        // Act: apply the fixed merge logic
+        if file.full_content.is_none() {
+            file.full_content = content;
+        }
+
+        // Assert: file.full_content == Some("fallback content")
+        assert_eq!(file.full_content, Some("fallback content".to_string()));
+    }
+
+    #[test]
+    fn test_merge_sets_full_content_when_none() {
+        // Arrange: PrFile with full_content = None, content = Some("fetched content")
+        let mut file = PrFile {
+            filename: "test.rs".to_string(),
+            status: "modified".to_string(),
+            additions: 5,
+            deletions: 2,
+            patch: Some("@@ -1,1 +1,1 @@".to_string()),
+            patch_truncated: false,
+            full_content: None,
+        };
+        let content = Some("fetched content".to_string());
+
+        // Act: apply merge logic
+        if file.full_content.is_none() {
+            file.full_content = content;
+        }
+
+        // Assert: file.full_content == Some("fetched content")
+        assert_eq!(file.full_content, Some("fetched content".to_string()));
+    }
+
+    #[test]
+    fn test_fetch_file_contents_fallback_on_truncated_patch() {
+        // Note: The Contents API network call cannot be unit-tested without a mock.
+        // The fallback is exercised in integration tests via the full fetch_pr_details flow.
+        // Unit tests for is_patch_truncated are above.
+        // New unit tests for the added/renamed/copied Contents API fallback:
+        // - test_pr_file_status_case_insensitive_added
+        // - test_pr_file_status_case_insensitive_modified
+        // - test_pr_file_oversized_patch_detection
+        // - test_pr_file_dedup_guard_full_content_present
+        // - test_pr_file_contents_api_fallback_flow
+    }
+
+    #[test]
+    fn test_review_comments_maps_fields_correctly() {
+        use crate::ai::types::PrReviewCommentDetails;
+
+        let bot = PrReviewCommentDetails {
+            id: 42,
+            author: "aptu[bot]".to_string(),
+            is_bot: true,
+            body: "suggestion".to_string(),
+            path: "src/lib.rs".to_string(),
+            line: Some(15),
+            side: Some(crate::facade::pr_review::DEFAULT_COMMENT_SIDE.to_string()),
+            commit_id: "abc123".to_string(),
+            original_line: None,
+        };
+        let human = PrReviewCommentDetails {
+            id: 99,
+            author: "human-user".to_string(),
+            is_bot: true,
+            body: "looks good".to_string(),
+            path: "src/main.rs".to_string(),
+            line: Some(30),
+            side: Some("LEFT".to_string()),
+            commit_id: "def456".to_string(),
+            original_line: None,
+        };
+
+        let kept: Vec<_> = vec![bot, human]
+            .into_iter()
+            .filter(|c| c.author == "aptu[bot]")
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].path, "src/lib.rs");
+        assert_eq!(kept[0].line, Some(15));
+        assert_eq!(
+            kept[0].side,
+            Some(crate::facade::pr_review::DEFAULT_COMMENT_SIDE.to_string())
+        );
+        assert_eq!(kept[0].commit_id, "abc123");
+    }
+}

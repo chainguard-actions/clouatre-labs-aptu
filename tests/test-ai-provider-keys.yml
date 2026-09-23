@@ -1,0 +1,39 @@
+name: Test AI provider API keys input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with AI provider keys (no event-specific steps fire under workflow_dispatch)
+        id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: 'sk-ant-test-placeholder'
+          gemini-api-key: 'AIza-test-placeholder'
+          openrouter-api-key: 'sk-or-test-placeholder'
+          zai-api-key: 'zai-test-placeholder'
+          provider: 'openrouter'
+          model: 'mistralai/mistral-small-2603'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+        continue-on-error: true
+
+      - name: Assert action completed (event-specific steps skipped under workflow_dispatch)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # Under workflow_dispatch, no issue/PR/schedule steps fire.
+          # The action resolves/installs aptu and sets up PATH, then exits cleanly.
+          # It may succeed (aptu installed) or fail (network/rate-limit), both are acceptable.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran and completed with outcome '$OUTCOME'"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

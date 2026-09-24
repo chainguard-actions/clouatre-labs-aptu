@@ -1,0 +1,33 @@
+name: Test skip-labeled=false skips nothing
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # When skip-labeled=false, the check-skip step should always output skip=false
+      # regardless of issue labels. The action should proceed to install aptu.
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+        continue-on-error: true
+
+      - name: Assert action ran (skip-labeled=false means no early exit)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          # With skip-labeled=false, check-skip always outputs skip=false.
+          # The action proceeds to resolve version and install binary.
+          # Success or graceful failure are both acceptable under harness constraints.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

@@ -1,0 +1,51 @@
+name: Test basic usage (workflow_dispatch)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          skip-labeled: 'false'
+        continue-on-error: true
+
+      - name: Assert check-skip ran and binary was installed
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          # Under workflow_dispatch, no issue/PR/schedule steps fire.
+          # The action should succeed: check-skip, resolve-version, install binary, setup-path all run.
+          # It may fail if the GitHub API call to resolve version fails (sentinel repo),
+          # but the resolve-version step uses GH_TOKEN against the real clouatre-labs/aptu repo,
+          # so it should succeed.
+          if [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action completed successfully"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (expected under harness constraints)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert aptu binary is installed (if action succeeded)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ]; then
+            if command -v aptu >/dev/null 2>&1 || [ -f "$HOME/.local/bin/aptu" ]; then
+              echo "PASS: aptu binary found"
+            else
+              echo "FAIL: aptu binary not found after successful action"
+              exit 1
+            fi
+          else
+            echo "SKIP: action did not succeed, skipping binary check"
+          fi

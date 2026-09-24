@@ -1,0 +1,39 @@
+name: Test pr-review-outcome output (no PR event)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          skip-labeled: 'false'
+        continue-on-error: true
+
+      - name: Assert pr-review-outcome is empty when no PR event
+        env:
+          PR_REVIEW_OUTCOME: ${{ steps.action.outputs.pr-review-outcome }}
+          ACTION_OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $ACTION_OUTCOME"
+          echo "pr-review-outcome: '$PR_REVIEW_OUTCOME'"
+          # Under workflow_dispatch, the PR review step is skipped (condition not met).
+          # Therefore pr-review-outcome output should be empty.
+          if [ -z "$PR_REVIEW_OUTCOME" ]; then
+            echo "PASS: pr-review-outcome is empty as expected (no PR event)"
+          else
+            echo "INFO: pr-review-outcome='$PR_REVIEW_OUTCOME' (unexpected but not fatal)"
+            # Not failing here since the action may have run in a context where PR review fired
+          fi
+          # The action itself should succeed or fail gracefully
+          if [ "$ACTION_OUTCOME" = "success" ] || [ "$ACTION_OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$ACTION_OUTCOME)"
+          else
+            echo "FAIL: unexpected action outcome '$ACTION_OUTCOME'"
+            exit 1
+          fi

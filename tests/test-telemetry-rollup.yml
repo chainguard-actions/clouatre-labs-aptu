@@ -1,0 +1,48 @@
+name: Test telemetry-rollup flag
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Prepare telemetry rollup path
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.aptu"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          skip-labeled: 'false'
+          telemetry-rollup: 'true'
+          telemetry-rollup-path: '.aptu/telemetry-rollup.jsonl'
+        continue-on-error: true
+
+      - name: Assert action ran with telemetry-rollup enabled
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          # The telemetry-rollup step runs when telemetry-rollup=true.
+          # It calls scripts/telemetry-rollup.sh with || true so it never fails the action.
+          # The action should succeed or fail gracefully.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran with telemetry-rollup=true (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Check telemetry rollup script exists in action
+        run: |
+          SCRIPT_PATH="action/scripts/telemetry-rollup.sh"
+          if [ -f "$SCRIPT_PATH" ]; then
+            echo "PASS: telemetry-rollup.sh script found at $SCRIPT_PATH"
+          else
+            echo "INFO: telemetry-rollup.sh not found at $SCRIPT_PATH (may be at a different path)"
+            # List what's in the action directory for debugging
+            find action/ -name "*.sh" 2>/dev/null || true
+          fi

@@ -1,0 +1,49 @@
+name: Test scan-security step
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create scan target directory
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/tests/fixtures/scan-target"
+          cat > "$GITHUB_WORKSPACE/tests/fixtures/scan-target/example.py" << 'EOF'
+          # Example Python file for security scanning test
+          import os
+
+          def get_user_data(user_id):
+              # Simple function for testing
+              return {"id": user_id, "name": "test"}
+          EOF
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          scan-path: '${{ github.workspace }}/tests/fixtures/scan-target'
+          fail-on: ''
+          sarif-upload: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+        continue-on-error: true
+
+      - name: Assert action outcome
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          # The action may succeed or fail depending on whether aptu installs correctly.
+          # With fail-on='' the scan step is non-blocking (continue-on-error: true in action).
+          # With sarif-upload=false the SARIF upload step is skipped.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

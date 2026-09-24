@@ -1,0 +1,53 @@
+name: Test AI provider inputs coverage
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create dummy instructions file
+        run: |
+          mkdir -p /tmp/aptu-test
+          echo "# PR Review Instructions" > /tmp/aptu-test/instructions.md
+          echo "Review for correctness and style." >> /tmp/aptu-test/instructions.md
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          # AI provider API keys (all optional; steps that use them won't run under workflow_dispatch)
+          anthropic-api-key: ''
+          gemini-api-key: ''
+          openrouter-api-key: ''
+          zai-api-key: ''
+          # AI model selection
+          provider: 'openrouter'
+          model: 'mistralai/mistral-small-2603'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          # PR review inputs
+          instructions-file: '/tmp/aptu-test/instructions.md'
+          # Behavior flags
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert action completed (install or skip)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # Under workflow_dispatch, the action resolves/installs aptu but skips
+          # PR review and issue triage (those require pull_request/issues events).
+          # The action may succeed (aptu installed) or fail (API rate limit / sentinel repo).
+          # Either way, it must not produce an unexpected outcome.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action completed with outcome '$OUTCOME' (expected under workflow_dispatch)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

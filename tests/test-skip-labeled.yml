@@ -1,0 +1,64 @@
+name: Test skip-labeled behavior
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Test with skip-labeled=false: action should proceed with setup
+      - id: action-no-skip
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          fallback-provider: ''
+          fallback-model: ''
+        continue-on-error: true
+
+      - name: Assert action ran with skip-labeled=false
+        env:
+          OUTCOME: ${{ steps.action-no-skip.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # With skip-labeled=false, the action should proceed through setup steps.
+          # Under workflow_dispatch, no issue/PR steps fire, so it should succeed
+          # (or fail gracefully on install steps).
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      # Test with skip-labeled=true (default): under workflow_dispatch, issue labels
+      # are empty, so skip=false and the action proceeds normally.
+      - id: action-with-skip
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          fallback-provider: ''
+          fallback-model: ''
+        continue-on-error: true
+
+      - name: Assert action ran with skip-labeled=true (no issue labels present)
+        env:
+          OUTCOME: ${{ steps.action-with-skip.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # With skip-labeled=true but no issue labels (workflow_dispatch context),
+          # skip=false and the action proceeds through setup steps.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

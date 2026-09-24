@@ -1,0 +1,73 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Test 1: With fallback provider/model set, config should be written
+      - id: action-with-fallback
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+        continue-on-error: true
+
+      - name: Assert fallback config was written with correct content
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          echo "Checking for config at: $CONFIG"
+          if [ -f "$CONFIG" ]; then
+            echo "Config contents:"
+            cat "$CONFIG"
+            if grep -q 'openrouter' "$CONFIG" && grep -q 'inception/mercury-2' "$CONFIG"; then
+              echo "PASS: fallback config contains expected provider and model"
+            else
+              echo "FAIL: fallback config missing expected provider or model"
+              cat "$CONFIG"
+              exit 1
+            fi
+          else
+            echo "INFO: config file not present (action may have failed before writing it)"
+            # Check if action failed
+            OUTCOME="${{ steps.action-with-fallback.outcome }}"
+            if [ "$OUTCOME" = "failure" ]; then
+              echo "PASS: action failed gracefully (install step may have failed)"
+            else
+              echo "FAIL: action succeeded but config file was not written"
+              exit 1
+            fi
+          fi
+
+      # Test 2: With empty fallback provider, config writing step should be skipped
+      # (the 'if' condition on the step is: inputs.fallback-provider != '' || inputs.fallback-model != '')
+      - name: Remove existing config to test empty fallback
+        run: rm -f "$HOME/.config/aptu/config.toml"
+
+      - id: action-no-fallback
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: ''
+          fallback-model: ''
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+        continue-on-error: true
+
+      - name: Assert config was NOT written when fallback is empty
+        run: |
+          CONFIG="$HOME/.config/aptu/config.toml"
+          if [ -f "$CONFIG" ]; then
+            echo "FAIL: config file was written even though fallback-provider and fallback-model are empty"
+            cat "$CONFIG"
+            exit 1
+          else
+            echo "PASS: config file was not written (fallback-provider and fallback-model are empty)"
+          fi

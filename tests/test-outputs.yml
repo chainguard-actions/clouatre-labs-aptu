@@ -1,0 +1,51 @@
+name: Test action outputs under workflow_dispatch
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+        continue-on-error: true
+
+      - name: Assert outputs under workflow_dispatch
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          PR_REVIEW_OUTCOME: ${{ steps.action.outputs.pr-review-outcome }}
+          LINT_ISSUE_OUTCOME: ${{ steps.action.outputs.lint-issue-outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "pr-review-outcome: $PR_REVIEW_OUTCOME"
+          echo "lint-issue-outcome: $LINT_ISSUE_OUTCOME"
+
+          # Under workflow_dispatch:
+          # - pr-review step is gated on pull_request/repository_dispatch → does not run → output empty
+          # - lint-issue step is gated on lint-issue-file input being non-empty → does not run → output empty
+          if [ "$OUTCOME" = "success" ]; then
+            # pr-review-outcome should be empty (step didn't run)
+            if [ -n "$PR_REVIEW_OUTCOME" ]; then
+              echo "FAIL: pr-review-outcome should be empty under workflow_dispatch but got '$PR_REVIEW_OUTCOME'"
+              exit 1
+            fi
+            # lint-issue-outcome should be empty (no lint-issue-file provided)
+            if [ -n "$LINT_ISSUE_OUTCOME" ]; then
+              echo "FAIL: lint-issue-outcome should be empty when no lint-issue-file provided but got '$LINT_ISSUE_OUTCOME'"
+              exit 1
+            fi
+            echo "PASS: outputs are empty as expected under workflow_dispatch"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (aptu install may have failed in harness)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

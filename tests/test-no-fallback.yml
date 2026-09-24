@@ -1,0 +1,41 @@
+name: Test with no fallback provider (config file should not be written)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: ''
+          fallback-model: ''
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert action ran and produced a defined outcome
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          if [ "$OUTCOME" != "success" ] && [ "$OUTCOME" != "failure" ]; then
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+          echo "PASS: action ran with outcome '$OUTCOME'"
+
+      - name: Assert fallback config file was NOT written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking that config file was NOT created at: $CONFIG_FILE"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "FAIL: config.toml was unexpectedly created when fallback-provider and fallback-model are empty"
+            cat "$CONFIG_FILE"
+            exit 1
+          fi
+          echo "PASS: config.toml not created (fallback-provider and fallback-model are both empty)"

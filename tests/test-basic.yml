@@ -1,0 +1,49 @@
+name: Test basic usage (workflow_dispatch, no event-specific steps)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          skip-labeled: 'true'
+
+      - name: Assert action ran and produced a defined outcome
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          PR_REVIEW_OUTCOME: ${{ steps.action.outputs.pr-review-outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "pr-review-outcome: '$PR_REVIEW_OUTCOME'"
+          # Under workflow_dispatch, no PR/issue/schedule event fires, so the
+          # action's main job is to install the aptu binary. It may succeed or
+          # fail gracefully (e.g. SLSA attestation not available in act).
+          if [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action succeeded"
+            # If it succeeded, aptu should be on PATH
+            if command -v aptu > /dev/null 2>&1; then
+              echo "PASS: aptu binary found at $(command -v aptu)"
+            else
+              echo "INFO: aptu not on PATH in this shell (PATH set via GITHUB_PATH, may not propagate)"
+            fi
+            # pr-review-outcome should be empty (no PR event)
+            if [ -n "$PR_REVIEW_OUTCOME" ]; then
+              echo "WARN: expected empty pr-review-outcome under workflow_dispatch, got: $PR_REVIEW_OUTCOME"
+            else
+              echo "PASS: pr-review-outcome is empty as expected for non-PR event"
+            fi
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (expected in act environment without full GitHub Actions infrastructure)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

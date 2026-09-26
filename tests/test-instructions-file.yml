@@ -1,0 +1,56 @@
+name: Test instructions-file input
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create instructions file
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/hardened/tests/fixtures"
+          cat > "$GITHUB_WORKSPACE/hardened/tests/fixtures/pr-review-instructions.md" <<'EOF'
+          # PR Review Instructions
+          Focus on correctness, security, and performance.
+          EOF
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          instructions-file: "hardened/tests/fixtures/pr-review-instructions.md"
+          dry-run: "true"
+          no-comment: "true"
+          apply-labels: "false"
+          fallback-provider: ""
+          fallback-model: ""
+        continue-on-error: true
+
+      - name: Assert action completed with instructions-file input
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # Under workflow_dispatch no PR review step fires, so action should succeed
+          if [ "$OUTCOME" != "success" ]; then
+            echo "FAIL: expected action to succeed under workflow_dispatch with instructions-file set, got: $OUTCOME"
+            exit 1
+          fi
+
+          # Verify metrics outputs are set
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+
+          echo "PASS: action completed with instructions-file input set"

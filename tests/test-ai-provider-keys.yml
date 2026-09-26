@@ -1,0 +1,66 @@
+name: Test AI provider API key inputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: "sk-ant-test-placeholder"
+          cerebras-api-key: "csk-test-placeholder"
+          gemini-api-key: "AIza-test-placeholder"
+          groq-api-key: "gsk_test-placeholder"
+          openrouter-api-key: "sk-or-test-placeholder"
+          zai-api-key: "zai-test-placeholder"
+          zenmux-api-key: "zmx-test-placeholder"
+          dry-run: "true"
+          no-comment: "true"
+          apply-labels: "false"
+          fallback-provider: ""
+          fallback-model: ""
+        continue-on-error: true
+
+      - name: Assert action completed (metrics outputs present)
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # Under workflow_dispatch no AI steps fire, so metrics should be zero/n/a
+          # The action should succeed (no issue/PR event to process)
+          if [ "$OUTCOME" != "success" ]; then
+            echo "FAIL: expected action to succeed under workflow_dispatch, got: $OUTCOME"
+            exit 1
+          fi
+
+          # Verify metrics outputs are set (even if zero)
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output is empty"
+            exit 1
+          fi
+          if [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms output is empty"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+
+          echo "PASS: action completed with all AI provider key inputs set"

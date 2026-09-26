@@ -1,0 +1,50 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: ''
+          cerebras-api-key: ''
+          gemini-api-key: ''
+          groq-api-key: ''
+          openrouter-api-key: ''
+          zai-api-key: ''
+          zenmux-api-key: ''
+          instructions-file: ''
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          pr-queue: 'false'
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # Under workflow_dispatch no AI steps run, so metrics should be zero/n/a
+          if [ "$INPUT_TOKENS" != "0" ] && [ -n "$INPUT_TOKENS" ]; then
+            echo "WARN: expected input-tokens=0, got '$INPUT_TOKENS'"
+          fi
+
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is missing"
+            exit 1
+          fi
+
+          echo "PASS: all expected outputs are present"

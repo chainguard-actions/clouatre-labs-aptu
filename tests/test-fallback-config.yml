@@ -1,0 +1,50 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Test that the fallback config is written when fallback-provider and fallback-model are set.
+      # The "Write fallback AI config" step runs before binary installation, so the config
+      # should be written even if the binary install/attestation step fails later.
+      # We use continue-on-error: true because the binary installation (gh attestation verify)
+      # may not succeed in the act environment.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert fallback config was written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config file was not created at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          # Verify it contains the expected provider and model
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'openrouter'"
+            exit 1
+          fi
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain 'inception/mercury-2'"
+            exit 1
+          fi
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config does not contain '[ai.fallback]' section"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"

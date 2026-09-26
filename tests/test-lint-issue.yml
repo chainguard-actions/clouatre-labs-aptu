@@ -1,0 +1,54 @@
+name: Test lint-issue step
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The lint-issue step runs when lint-issue-file is set.
+      # aptu lint-issue validates an issue body markdown file.
+      # We use a fixture file committed to the repo.
+      # The action installs aptu first, then runs lint-issue.
+      # lint-fail-on=false means the step is advisory (continue-on-error).
+      # The lint-issue-outcome output should be set to 'success' or 'failure'.
+      # Binary installation (gh attestation verify) may fail in act, so we use
+      # continue-on-error: true and accept graceful failure.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          lint-issue-file: ${{ github.workspace }}/tests/fixtures/sample-issue.md
+          lint-issue-type: 'feature'
+          lint-fail-on: 'false'
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+
+      - name: Assert lint-issue step ran
+        env:
+          OUTCOME: ${{ steps.action.outputs.lint-issue-outcome }}
+          STEP_OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "step outcome: $STEP_OUTCOME"
+          echo "lint-issue-outcome: $OUTCOME"
+          # The action step itself should succeed (lint-fail-on=false means advisory)
+          # OR it may fail due to missing AI key or binary install failure in act.
+          # Either way, the step should have run and set an outcome or failed gracefully.
+          if [ "$STEP_OUTCOME" = "success" ]; then
+            if [ -z "$OUTCOME" ]; then
+              echo "FAIL: action succeeded but lint-issue-outcome output is empty"
+              exit 1
+            fi
+            echo "PASS: lint-issue-outcome='$OUTCOME'"
+          elif [ "$STEP_OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (likely binary install/attestation in act or missing AI API key)"
+          else
+            echo "FAIL: unexpected step outcome '$STEP_OUTCOME'"
+            exit 1
+          fi

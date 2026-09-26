@@ -10,99 +10,40 @@
 
 **Harden Agent Version:** `2`
 
-Action **clouatre-labs--aptu/v0.8.4** was hardened automatically. 6 finding(s) were identified and resolved across 2 iteration(s).
+Action **clouatre-labs--aptu/v0.8.4** was hardened automatically. 2 finding(s) were identified and resolved across 1 iteration(s).
 
 ## Findings Fixed
 
 ### script-injection (severity: high)
 
-Sub-rule (a): The 'Install aptu binary' step directly interpolates `${{ steps.resolve-version.outputs.version }}` inside the run: shell script as `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"`. This is a steps.*.outputs.* context value injected directly into the shell command string before the shell ever sees it, enabling script injection if the output contains shell metacharacters.
+Sub-rule (a): The 'Install aptu binary' run: block directly interpolates a ${{ }} expression inside the shell script: `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"`  Any ${{ ... }} expression inside a run: block is substituted by the YAML template engine before the shell sees it, bypassing all shell quoting. If the step output contains shell metacharacters (e.g. injected via a compromised upstream step), they will be executed by the shell.
 
 Locations:
 
-- `action.yml:230`
+- `action.yml:232`
 
 ### script-injection (severity: high)
 
-Sub-rule (a): The 'Validate commit messages' step directly interpolates `${{ github.event.pull_request.base.sha }}` and `${{ github.event.pull_request.head.sha }}` inside the `npx commitlint --from ... --to ...` run: block. Any ${{ }} expression directly in a run: shell string is a script-injection risk.
+Sub-rule (b): Multiple run: blocks build an $ARGS string by appending unquoted env vars sourced from inputs.* (e.g. `ARGS="$ARGS --since $SINCE"` where SINCE=${{ inputs.since }}, `ARGS="$ARGS --state $ISSUE_STATE"` where ISSUE_STATE=${{ inputs.issue-state }}, `ARGS="$ARGS --repo-path $REPO_PATH"` where REPO_PATH=${{ inputs.repo-path }}, `ARGS="$ARGS --instructions-file $INSTRUCTIONS_FILE"` where INSTRUCTIONS_FILE=${{ inputs.instructions-file }}), then pass $ARGS unquoted to the CLI (e.g. `aptu issue triage $ARGS "$ISSUE_REF"`, `aptu pr review $ARGS "$PR_REF"`). An attacker-controlled input value containing shell metacharacters (`;`, `|`, `&`, `$(...)`) will be word-split and executed by the shell.
 
 Locations:
 
-- `.github/workflows/ci.yml:62`
-
-### script-injection (severity: high)
-
-Sub-rule (a): The 'Verify all jobs passed or were skipped' step (ci-result job) directly interpolates `${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}` inside a run: shell if-condition string. Any ${{ }} expression directly in a run: shell string is a script-injection risk.
-
-Locations:
-
-- `.github/workflows/ci.yml:299`
-
-### script-injection (severity: high)
-
-Sub-rule (a): Multiple run: blocks in build-and-attest.yml directly interpolate ${{ }} expressions into shell commands: (1) `cargo build --release --target ${{ inputs.target }}` in 'Build binary (dry-run)'; (2) `cosign sign-blob ... "${{ steps.upload-cli.outputs.tar }}.bundle" "${{ steps.upload-cli.outputs.tar }}"` in 'Sign tarball with cosign'; (3) `gh release upload ${{ github.ref_name }} ...` in 'Upload tarball .bundle to release'; (4) `find target/${{ inputs.target }}/debian ...` and `gh release upload ${{ github.ref_name }} ...` in 'Upload aptu .deb to release', 'Sign aptu .deb with cosign', and 'Upload aptu .deb .bundle to release'; (5) `cargo deb --target ${{ inputs.target }}` in 'Generate aptu .deb package'. These are inputs.* and steps.*.outputs.* values injected directly into shell.
-
-Locations:
-
-- `.github/workflows/build-and-attest.yml:72`
-- `.github/workflows/build-and-attest.yml:76`
-- `.github/workflows/build-and-attest.yml:82`
-- `.github/workflows/build-and-attest.yml:96`
-- `.github/workflows/build-and-attest.yml:107`
-- `.github/workflows/build-and-attest.yml:116`
-- `.github/workflows/build-and-attest.yml:126`
-
-### script-injection (severity: high)
-
-Sub-rule (a): Multiple run: blocks in release.yml directly interpolate `${{ github.repository }}` into shell commands used in `gh api "repos/${{ github.repository }}/..."` calls within the 'Verify tag is signed' step and the 'Move floating minor tag to current release' step, and `${{ github.repository }}` in the 'Download SHA256 checksums' step. Any ${{ }} expression directly in a run: shell string is a script-injection risk.
-
-Locations:
-
-- `.github/workflows/release.yml:44`
-- `.github/workflows/release.yml:52`
-- `.github/workflows/release.yml:148`
-- `.github/workflows/release.yml:155`
-- `.github/workflows/release.yml:163`
-- `.github/workflows/release.yml:168`
-- `.github/workflows/release.yml:232`
-
-### github-env-injection (severity: high)
-
-The 'Extract version from tag or input' step in release.yml maps `inputs.version` to the `INPUT_VERSION` env var, then writes `echo "VERSION=$VERSION" >> "$GITHUB_ENV"` where VERSION is derived from INPUT_VERSION without the required sanitization step (`printf '%s' "$INPUT_VERSION" | tr -d '\n\r'`). An attacker-controlled `inputs.version` value containing newlines could inject arbitrary environment variables into subsequent steps.
-
-Locations:
-
-- `.github/workflows/release.yml:82`
+- `action.yml:290`
+- `action.yml:325`
+- `action.yml:400`
+- `action.yml:415`
 
 ## Iteration Notes
 
 ### Iteration 1
 
-**Fixes applied:** script-injection, github-env-injection
-
-**Notes:**
-
-Fixed all script injection and github-env-injection findings across 4 files:
-
-1. action.yml: Moved `${{ steps.resolve-version.outputs.version }}` from run: shell string into env: block as APTU_VERSION in the 'Install aptu binary' step.
-
-2. .github/workflows/ci.yml: (a) Moved PR base/head SHAs into env: block as BASE_SHA/HEAD_SHA in 'Validate commit messages'. (b) Moved the contains() expression into env: block as HAS_FAILURE in 'Verify all jobs passed or were skipped'.
-
-3. .github/workflows/build-and-attest.yml: Moved all ${{ inputs.target }}, ${{ github.ref_name }}, and ${{ steps.upload-cli.outputs.tar }} expressions into env: blocks (as BUILD_TARGET, REF_NAME, UPLOAD_TAR) across 7 steps: 'Build binary (dry-run)', 'Sign tarball with cosign', 'Upload tarball .bundle to release', 'Generate aptu .deb package', 'Upload aptu .deb to release', 'Sign aptu .deb with cosign', 'Upload aptu .deb .bundle to release'.
-
-4. .github/workflows/release.yml: (a) Moved ${{ github.repository }} into env: block as GH_REPOSITORY in 'Verify tag is signed', 'Move floating minor tag to current release', and 'Download SHA256 checksums' steps. (b) Added newline sanitization (printf + tr -d '\n\r') for INPUT_VERSION before writing to GITHUB_ENV in 'Extract version from tag or input' step.
-
-### Iteration 2
-
 **Fixes applied:** script-injection
 
 **Notes:**
 
-Fixed two script injection vulnerabilities in action.yml by converting string-based ARGS concatenation to bash arrays:
+Fixed two script-injection findings in hardened/action/action.yml:
 
-1. 'Run aptu issue triage (scheduled batch)' step (lines ~285-300): Changed `ARGS="$ARGS --since $SINCE"` and `ARGS="$ARGS --state $ISSUE_STATE"` patterns to use a bash array: `ARGS=(--repo "$REPO")` with `ARGS+=(--since "$SINCE")` and `ARGS+=(--state "$ISSUE_STATE")`. Command invocation changed from `aptu issue triage $ARGS` to `aptu issue triage "${ARGS[@]}"`.
+1. Line 232 (Install aptu binary step): Moved `${{ steps.resolve-version.outputs.version }}` from the run: block into the env: block as `APTU_VERSION: ${{ steps.resolve-version.outputs.version }}`. The shell script now uses `$APTU_VERSION` as a regular environment variable.
 
-2. 'Run aptu PR review' step (lines ~360-370): Changed `ARGS="$ARGS --repo-path $REPO_PATH"` and `ARGS="$ARGS --instructions-file $INSTRUCTIONS_FILE"` patterns to use a bash array: `ARGS=(--comment --force)` with `ARGS+=(--repo-path "$REPO_PATH")` and `ARGS+=(--instructions-file "$INSTRUCTIONS_FILE")`. Command invocation changed from `aptu pr review $ARGS "$PR_REF"` to `aptu pr review "${ARGS[@]}" "$PR_REF"`.
-
-Using bash arrays ensures each argument value is properly quoted and word-boundary safe, preventing shell metacharacter injection from attacker-controlled inputs.
+2. Lines 290, 325, 400, 415 (four run: blocks): Converted all ARGS string concatenation patterns to bash arrays. User-controlled inputs (SINCE, ISSUE_STATE, REPO_PATH, INSTRUCTIONS_FILE) are now properly quoted as individual array elements (e.g., `ARGS+=(--since "$SINCE")`), and commands use `"${ARGS[@]}"` for safe array expansion. This prevents shell metacharacters in input values from being executed.
 

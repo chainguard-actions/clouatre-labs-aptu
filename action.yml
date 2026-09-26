@@ -225,7 +225,7 @@ runs:
     - name: Cache aptu binary
       id: cache-aptu
       if: steps.check-skip.outputs.skip != 'true'
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: chainguard-actions/actions-cache@b5b76c7016521bd34554159c882773b3df2e994a # v5
       with:
         path: ~/.local/bin/aptu
         key: aptu-${{ steps.resolve-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -302,22 +302,22 @@ runs:
         set -e
 
         ISSUE_REF="${REPO}#${ISSUE_NUMBER}"
-        ARGS=""
+        ARGS=()
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS="$ARGS --dry-run"
+          ARGS+=(--dry-run)
         fi
 
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          ARGS="$ARGS --no-apply"
+          ARGS+=(--no-apply)
         fi
 
         if [[ "$NO_COMMENT" == "true" ]]; then
-          ARGS="$ARGS --no-comment"
+          ARGS+=(--no-comment)
         fi
 
-        echo "Running: aptu issue triage $ARGS $ISSUE_REF"
-        aptu issue triage $ARGS "$ISSUE_REF"
+        echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"
+        aptu issue triage "${ARGS[@]}" "$ISSUE_REF"
     - name: Run aptu issue triage (scheduled batch)
       if: github.event_name == 'schedule' && steps.check-skip.outputs.skip != 'true'
       shell: bash
@@ -381,14 +381,14 @@ runs:
         set -e
 
         PR_REF="${REPO}#${PR_NUMBER}"
-        ARGS=""
+        ARGS=()
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS="$ARGS --dry-run"
+          ARGS+=(--dry-run)
         fi
 
-        echo "Running: aptu pr label $ARGS $PR_REF"
-        aptu pr label $ARGS "$PR_REF"
+        echo "Running: aptu pr label ${ARGS[*]} $PR_REF"
+        aptu pr label "${ARGS[@]}" "$PR_REF"
     - name: Run aptu PR review
       if: github.event_name == 'pull_request'
       continue-on-error: true # Non-blocking - AI review is advisory
@@ -528,7 +528,7 @@ runs:
         fi
     - name: Upload token usage artifact
       if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: chainguard-actions/actions-upload-artifact@f9571ddcfab0329c68a1e92a4b612bee5d8e5042 # v7.0.1
       with:
         name: aptu-token-usage-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-token-usage.jsonl
@@ -536,7 +536,7 @@ runs:
         if-no-files-found: ignore
     - name: Upload review context artifact
       if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: chainguard-actions/actions-upload-artifact@f9571ddcfab0329c68a1e92a4b612bee5d8e5042 # v7.0.1
       with:
         name: aptu-review-context-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-review-context.jsonl

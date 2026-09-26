@@ -1,4 +1,4 @@
-name: Test API keys input coverage
+name: Test API keys and instructions-file input coverage
 on:
   workflow_dispatch:
 jobs:
@@ -11,17 +11,18 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'sk-ant-test-placeholder'
-          cerebras-api-key: 'csk-test-placeholder'
-          gemini-api-key: 'AIza-test-placeholder'
-          groq-api-key: 'gsk_test-placeholder'
-          openrouter-api-key: 'sk-or-test-placeholder'
-          zai-api-key: 'zai-test-placeholder'
-          zenmux-api-key: 'zmx-test-placeholder'
-          dry-run: 'true'
-          skip-labeled: 'false'
-          pr-queue: 'false'
-          scan-path: ''
+          anthropic-api-key: "dummy-anthropic-key"
+          cerebras-api-key: "dummy-cerebras-key"
+          gemini-api-key: "dummy-gemini-key"
+          groq-api-key: "dummy-groq-key"
+          openrouter-api-key: "dummy-openrouter-key"
+          zai-api-key: "dummy-zai-key"
+          zenmux-api-key: "dummy-zenmux-key"
+          instructions-file: ""
+          dry-run: "true"
+          no-comment: "true"
+          apply-labels: "false"
+          skip-labeled: "false"
 
       - name: Assert metrics outputs are present
         env:
@@ -35,16 +36,21 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # Under workflow_dispatch no AI calls are made, so metrics should be zero/n/a defaults
-          if [ -z "$INPUT_TOKENS" ] && [ -z "$OUTPUT_TOKENS" ] && [ -z "$DURATION_MS" ]; then
-            echo "FAIL: metrics outputs are all empty"
+          # Under workflow_dispatch no AI steps fire, so tokens should be 0
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
             exit 1
           fi
-
-          # cache-hit-ratio should be n/a when no tokens were consumed
-          if [ "$CACHE_HIT_RATIO" != "n/a" ] && [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: cache-hit-ratio should be n/a or a percentage, got: '$CACHE_HIT_RATIO'"
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
             exit 1
           fi
-
-          echo "PASS: all API key inputs accepted and metrics outputs present"
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$DURATION_MS'"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+            exit 1
+          fi
+          echo "PASS: all metrics outputs are correct for a no-op run"

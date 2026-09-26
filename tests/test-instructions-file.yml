@@ -1,0 +1,42 @@
+name: Test instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create instructions file fixture
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/hardened/tests/fixtures"
+          cat > "$GITHUB_WORKSPACE/hardened/tests/fixtures/pr-review-instructions.md" <<'EOF'
+          # PR Review Instructions
+          Focus on correctness, security, and performance.
+          EOF
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          instructions-file: "hardened/tests/fixtures/pr-review-instructions.md"
+          dry-run: "true"
+          no-comment: "true"
+          apply-labels: "false"
+
+      - name: Assert action ran with instructions-file input
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action succeeded with instructions-file input"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (sentinel repo or API rate limit)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

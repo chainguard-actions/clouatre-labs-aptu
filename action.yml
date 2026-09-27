@@ -305,15 +305,15 @@ runs:
         ARGS=()
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS+=("--dry-run")
+          ARGS+=(--dry-run)
         fi
 
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          ARGS+=("--no-apply")
+          ARGS+=(--no-apply)
         fi
 
         if [[ "$NO_COMMENT" == "true" ]]; then
-          ARGS+=("--no-comment")
+          ARGS+=(--no-comment)
         fi
 
         echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"
@@ -464,7 +464,7 @@ runs:
       run: |
         set -e
         if [[ -n "$SCAN_DIFF" ]]; then
-          echo "Running: aptu scan-security --diff \"$SCAN_DIFF\" --output sarif"
+          echo "Running: aptu scan-security --diff $SCAN_DIFF --output sarif"
           aptu scan-security --diff "$SCAN_DIFF" --output sarif
         else
           echo "Running: aptu scan-security $SCAN_PATH --output sarif"

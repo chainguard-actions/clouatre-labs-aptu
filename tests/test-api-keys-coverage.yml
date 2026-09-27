@@ -7,24 +7,34 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Create instructions file for test
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.github/instructions"
+          echo "# PR Review Instructions" > "$GITHUB_WORKSPACE/.github/instructions/pr-review.md"
+          echo "Review code carefully." >> "$GITHUB_WORKSPACE/.github/instructions/pr-review.md"
+
       - id: action
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'sk-ant-test-placeholder'
-          cerebras-api-key: 'csk-test-placeholder'
-          gemini-api-key: 'AIza-test-placeholder'
-          groq-api-key: 'gsk_test-placeholder'
-          openrouter-api-key: 'sk-or-test-placeholder'
-          zai-api-key: 'zai-test-placeholder'
-          zenmux-api-key: 'zmx-test-placeholder'
-          instructions-file: ''
+          # AI provider API keys (all optional; no AI calls fire on workflow_dispatch)
+          anthropic-api-key: ''
+          cerebras-api-key: ''
+          gemini-api-key: ''
+          groq-api-key: ''
+          openrouter-api-key: ''
+          zai-api-key: ''
+          zenmux-api-key: ''
+          # instructions-file input coverage
+          instructions-file: '.github/instructions/pr-review.md'
+          # Behavior flags
           dry-run: 'true'
           no-comment: 'true'
           apply-labels: 'false'
           skip-labeled: 'false'
-          pr-queue: 'false'
+          # Disable scan and queue so no AI calls are made
           scan-path: ''
+          pr-queue: 'false'
 
       - name: Assert metrics outputs are present
         env:
@@ -38,9 +48,10 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # Under workflow_dispatch with no AI calls, metrics default to 0/n/a
+          # On workflow_dispatch with no scan-path/pr-queue, no AI calls fire.
+          # Metrics outputs should be present (zero or n/a are valid).
           if [ -z "$INPUT_TOKENS" ] && [ -z "$OUTPUT_TOKENS" ] && [ -z "$DURATION_MS" ] && [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: all metric outputs are empty — metrics-aggregate step did not run"
+            echo "FAIL: all metric outputs are empty — action did not produce any outputs"
             exit 1
           fi
           echo "PASS: metrics outputs are present"

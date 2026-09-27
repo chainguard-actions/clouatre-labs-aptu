@@ -1,4 +1,4 @@
-name: Test AI provider inputs coverage
+name: Test AI provider API key inputs coverage
 on:
   workflow_dispatch:
 jobs:
@@ -11,18 +11,19 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: "dummy-anthropic-key"
-          cerebras-api-key: "dummy-cerebras-key"
-          gemini-api-key: "dummy-gemini-key"
-          groq-api-key: "dummy-groq-key"
-          openrouter-api-key: "dummy-openrouter-key"
-          zai-api-key: "dummy-zai-key"
-          zenmux-api-key: "dummy-zenmux-key"
-          instructions-file: ".github/instructions/pr-review.md"
+          anthropic-api-key: "test-anthropic-key"
+          cerebras-api-key: "test-cerebras-key"
+          gemini-api-key: "test-gemini-key"
+          groq-api-key: "test-groq-key"
+          openrouter-api-key: "test-openrouter-key"
+          zai-api-key: "test-zai-key"
+          zenmux-api-key: "test-zenmux-key"
+          instructions-file: ""
           dry-run: "true"
           no-comment: "true"
-          apply-labels: "false"
           skip-labeled: "false"
+          fallback-provider: ""
+          fallback-model: ""
 
       - name: Assert metrics outputs are set
         env:
@@ -38,7 +39,7 @@ jobs:
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
           echo "effective-token-units: $ETU"
 
-          # Under workflow_dispatch no AI steps run, so tokens should be 0
+          # Under workflow_dispatch no AI calls are made, so tokens should be 0
           if [ "$INPUT_TOKENS" != "0" ]; then
             echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
             exit 1
@@ -59,4 +60,4 @@ jobs:
             echo "FAIL: expected effective-token-units=0, got '$ETU'"
             exit 1
           fi
-          echo "PASS: all metric outputs have expected default values"
+          echo "PASS: all metrics outputs have expected default values"

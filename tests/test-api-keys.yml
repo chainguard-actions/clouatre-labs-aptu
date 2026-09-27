@@ -1,4 +1,4 @@
-name: Test AI provider API keys coverage
+name: Test API key inputs coverage
 on:
   workflow_dispatch:
 jobs:
@@ -12,45 +12,40 @@ jobs:
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'test-anthropic-key'
-          cerebras-api-key: 'test-cerebras-key'
-          gemini-api-key: 'test-gemini-key'
-          groq-api-key: 'test-groq-key'
-          openrouter-api-key: 'test-openrouter-key'
-          zai-api-key: 'test-zai-key'
-          zenmux-api-key: 'test-zenmux-key'
+          anthropic-api-key: 'sk-ant-placeholder'
+          cerebras-api-key: 'csk-placeholder'
+          gemini-api-key: 'AIza-placeholder'
+          groq-api-key: 'gsk_placeholder'
+          openrouter-api-key: 'sk-or-placeholder'
+          zai-api-key: 'zai-placeholder'
+          zenmux-api-key: 'zmx-placeholder'
           dry-run: 'true'
           no-comment: 'true'
-          apply-labels: 'false'
+          skip-labeled: 'false'
           pr-queue: 'false'
 
-      - name: Assert metrics outputs are set
+      - name: Assert action ran (outputs set or failed gracefully on sentinel repo)
         env:
+          OUTCOME: ${{ steps.action.outcome }}
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
           OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
           DURATION_MS: ${{ steps.action.outputs.duration-ms }}
           CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
-          OUTCOME: ${{ steps.action.outcome }}
         run: |
           echo "outcome: $OUTCOME"
           echo "input-tokens: $INPUT_TOKENS"
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-
-          # The action either succeeds (aptu installed, no AI steps fired under workflow_dispatch)
-          # or fails gracefully (e.g. cannot resolve aptu release via sentinel repo token).
-          # In both cases, the metrics-aggregate step runs with if: always() and sets outputs.
-          if [ "$OUTCOME" = "success" ]; then
-            # Metrics outputs should be numeric zeros (no AI calls fired)
-            if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
-              echo "FAIL: expected input-tokens to be set"
-              exit 1
-            fi
-            echo "PASS: action succeeded with API key inputs"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "PASS: action failed gracefully (sentinel repo or network issue)"
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME); sentinel repo may cause failure which is expected"
           else
             echo "FAIL: unexpected outcome '$OUTCOME'"
             exit 1
           fi
+          # Verify metrics outputs are always set (even on failure, metrics-aggregate runs with always())
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output was not set"
+            exit 1
+          fi
+          echo "PASS: all assertions passed"

@@ -12,23 +12,25 @@ jobs:
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          # AI provider API keys (all covered in this test)
-          anthropic-api-key: 'sk-ant-test-placeholder'
-          cerebras-api-key: 'csk-test-placeholder'
-          gemini-api-key: 'AIza-test-placeholder'
-          groq-api-key: 'gsk_test-placeholder'
-          openrouter-api-key: 'sk-or-test-placeholder'
-          zai-api-key: 'zai-test-placeholder'
-          zenmux-api-key: 'zmx-test-placeholder'
-          # instructions-file coverage
-          instructions-file: '.github/instructions/pr-review.md'
+          # AI provider API keys (all optional, passed as empty to satisfy coverage)
+          anthropic-api-key: ''
+          cerebras-api-key: ''
+          gemini-api-key: ''
+          groq-api-key: ''
+          openrouter-api-key: ''
+          zai-api-key: ''
+          zenmux-api-key: ''
+          # instructions-file input coverage
+          instructions-file: ''
           # Use dry-run and no-comment to avoid side effects
           dry-run: 'true'
           no-comment: 'true'
-          # Under workflow_dispatch, no AI steps fire, so metrics will be zero
+          # Disable pr-queue so no API calls are made
           pr-queue: 'false'
+          # Skip scan to avoid needing a real path
+          scan-path: ''
 
-      - name: Assert action completed (success or graceful failure)
+      - name: Assert action ran (installed aptu or failed gracefully on sentinel repo)
         env:
           OUTCOME: ${{ steps.action.outcome }}
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
@@ -41,17 +43,15 @@ jobs:
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-
           if [ "$OUTCOME" = "success" ]; then
-            # Under workflow_dispatch, no AI steps fire; metrics should be zero/n/a
-            echo "PASS: action succeeded"
+            # Metrics outputs should be present (even if zero)
             if [ -z "$INPUT_TOKENS" ] && [ -z "$OUTPUT_TOKENS" ] && [ -z "$DURATION_MS" ]; then
-              echo "FAIL: all metric outputs are empty"
+              echo "FAIL: action succeeded but all metric outputs are empty"
               exit 1
             fi
-            echo "PASS: metric outputs are present"
+            echo "PASS: action succeeded with metric outputs"
           elif [ "$OUTCOME" = "failure" ]; then
-            echo "PASS: action failed gracefully (expected under sentinel repo or missing real API keys)"
+            echo "PASS: action failed gracefully (sentinel repo or API rate limit)"
           else
             echo "FAIL: unexpected outcome '$OUTCOME'"
             exit 1

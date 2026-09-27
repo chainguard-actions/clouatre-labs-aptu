@@ -305,15 +305,15 @@ runs:
         ARGS=()
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS+=(--dry-run)
+          ARGS+=("--dry-run")
         fi
 
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          ARGS+=(--no-apply)
+          ARGS+=("--no-apply")
         fi
 
         if [[ "$NO_COMMENT" == "true" ]]; then
-          ARGS+=(--no-comment)
+          ARGS+=("--no-comment")
         fi
 
         echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"

@@ -16,36 +16,27 @@ Action **clouatre-labs--aptu/v0.8.5** was hardened automatically. 2 finding(s) w
 
 ### script-injection (severity: high)
 
-Sub-rule (a): The 'Install aptu binary' step directly interpolates `${{ steps.resolve-version.outputs.version }}` inside a `run:` shell script: `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"`.
-
-Any `${{ ... }}` expression is substituted by the Actions runner before the shell ever sees the script, meaning a maliciously crafted value (e.g. containing `$(...)`, backticks, or semicolons) would be executed as shell code. The value should instead be passed via an `env:` variable and referenced as `"$APTU_VERSION"` (which it already is — but the initial assignment still uses direct interpolation, creating the injection window).
+Sub-rule (a): In the 'Install aptu binary' step, the expression `${{ steps.resolve-version.outputs.version }}` is interpolated directly inside a `run:` shell block: `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"`  This injects the `steps.*.outputs.*` context value through YAML template substitution before the shell ever sees it. A compromised or manipulated step output could inject arbitrary shell commands. The value should instead be passed via an `env:` variable and referenced as `"$APTU_VERSION"` (which it already is set to, but the initial assignment itself is the injection point).
 
 Locations:
 
-- `action.yml:232`
+- `action.yml:244`
 
 ### script-injection (severity: high)
 
-Sub-rule (b): Multiple `run:` steps build a `$ARGS` string by appending unquoted user-controlled env vars, then pass `$ARGS` unquoted to shell commands. Affected patterns:
-
-- 'Run aptu PR review': `ARGS="$ARGS --repo-path $REPO_PATH"` (REPO_PATH from inputs.repo-path) and `ARGS="$ARGS --instructions-file $INSTRUCTIONS_FILE"` (INSTRUCTIONS_FILE from inputs.instructions-file), then `aptu pr review $ARGS "$PR_REF"` — $ARGS is unquoted.
-- 'Run aptu issue triage (scheduled batch)': `ARGS="$ARGS --since $SINCE"` (SINCE from inputs.since) and `ARGS="$ARGS --state $ISSUE_STATE"` (ISSUE_STATE from inputs.issue-state), then `aptu issue triage $ARGS` — $ARGS is unquoted.
-- 'Run aptu issue triage' and 'Run aptu PR label': `aptu issue triage $ARGS "$ISSUE_REF"` and `aptu pr label $ARGS "$PR_REF"` — $ARGS is unquoted.
-
-Unquoted `$ARGS` allows the shell to word-split and glob-expand the value, and if any user-controlled input embedded in ARGS contains shell metacharacters (`;`, `|`, `&`, `$(...)`, etc.), it enables command injection. All user-controlled values appended to ARGS should be double-quoted at the point of appending (e.g. `ARGS="$ARGS --repo-path \"$REPO_PATH\""`), and $ARGS should be replaced with an array (`ARGS=(); ARGS+=(--repo-path "$REPO_PATH")`) to avoid word-splitting.
+Sub-rule (b): Multiple `run:` blocks expand the `$ARGS` shell variable unquoted when invoking `aptu` commands. `$ARGS` is built by appending values sourced from `inputs.*` context variables (e.g. `$SINCE`, `$ISSUE_STATE`, `$REPO_PATH`, `$INSTRUCTIONS_FILE`). Unquoted expansion allows shell metacharacters (`;`, `|`, `&`, `$(...)`, etc.) embedded in those inputs to be interpreted by the shell. Affected commands:
+- `aptu issue triage $ARGS "$ISSUE_REF"` (Run aptu issue triage step)
+- `aptu issue triage $ARGS` (Run aptu issue triage scheduled batch step)
+- `aptu pr label $ARGS "$PR_REF"` (Run aptu PR label step)
+- `aptu pr review $ARGS "$PR_REF"` (Run aptu PR review step)
+All occurrences of `$ARGS` in these final command invocations must be double-quoted: `"$ARGS"` or the argument list must be built as a proper array.
 
 Locations:
 
-- `action.yml:316`
-- `action.yml:319`
-- `action.yml:322`
-- `action.yml:338`
-- `action.yml:341`
-- `action.yml:344`
-- `action.yml:347`
-- `action.yml:350`
-- `action.yml:353`
-- `action.yml:356`
+- `action.yml:296`
+- `action.yml:323`
+- `action.yml:349`
+- `action.yml:393`
 
 ## Iteration Notes
 
@@ -55,9 +46,9 @@ Locations:
 
 **Notes:**
 
-Fixed two script-injection findings in action.yml:
+Fixed two script-injection findings in hardened/action/action.yml:
 
-1. 'Install aptu binary' step (line 232): Moved `${{ steps.resolve-version.outputs.version }}` from the inline run script into the step's env block as `APTU_VERSION: ${{ steps.resolve-version.outputs.version }}`, then referenced it as `$APTU_VERSION` in the shell script. This eliminates the direct expression interpolation injection window.
+1. 'Install aptu binary' step (line 244): Moved `${{ steps.resolve-version.outputs.version }}` from the `run:` shell block into the step's `env:` block as `APTU_VERSION: ${{ steps.resolve-version.outputs.version }}`. The shell script now references `$APTU_VERSION` as a plain environment variable.
 
-2. All four 'Run aptu ...' steps (lines 316-356): Converted string-based ARGS accumulation (`ARGS="$ARGS --flag $VALUE"`) to bash array-based accumulation (`ARGS=(); ARGS+=("--flag" "$VALUE")`). Final command invocations now use `"${ARGS[@]}"` (properly quoted array expansion) instead of unquoted `$ARGS`. This prevents word-splitting/glob-expansion of user-controlled values (REPO_PATH, INSTRUCTIONS_FILE, SINCE, ISSUE_STATE) and ensures each argument remains a separate, properly quoted token. Affected steps: 'Run aptu issue triage', 'Run aptu issue triage (scheduled batch)', 'Run aptu PR label', 'Run aptu PR review'.
+2. Four `aptu` command invocations (lines 296, 323, 349, 393): Converted the `$ARGS` string variable to a bash array `ARGS=()` in all four affected steps. Flags are appended with `ARGS+=(--flag)` or `ARGS+=(--flag "$VALUE")`, and the final commands use `"${ARGS[@]}"` to properly quote each element as a separate argument, preventing shell metacharacter injection while preserving correct argument boundaries.
 

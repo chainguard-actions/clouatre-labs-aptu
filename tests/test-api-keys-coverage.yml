@@ -9,51 +9,52 @@ jobs:
 
       - id: action
         uses: .
-        continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: "dummy-anthropic-key"
-          cerebras-api-key: "dummy-cerebras-key"
-          gemini-api-key: "dummy-gemini-key"
-          groq-api-key: "dummy-groq-key"
-          openrouter-api-key: "dummy-openrouter-key"
-          zai-api-key: "dummy-zai-key"
-          zenmux-api-key: "dummy-zenmux-key"
-          instructions-file: ".github/instructions/pr-review.md"
-          dry-run: "true"
-          no-comment: "true"
-          apply-labels: "false"
-          skip-labeled: "false"
-          pr-queue: "false"
+          # AI provider API keys (all covered here)
+          anthropic-api-key: 'dummy-anthropic-key'
+          cerebras-api-key: 'dummy-cerebras-key'
+          gemini-api-key: 'dummy-gemini-key'
+          groq-api-key: 'dummy-groq-key'
+          openrouter-api-key: 'dummy-openrouter-key'
+          zai-api-key: 'dummy-zai-key'
+          zenmux-api-key: 'dummy-zenmux-key'
+          # instructions-file coverage
+          instructions-file: ''
+          # Use dry-run and no-comment to avoid side effects
+          dry-run: 'true'
+          no-comment: 'true'
+          # Disable fallback to keep config simple
+          fallback-provider: ''
+          fallback-model: ''
 
-      - name: Assert action ran (check-skip and metrics steps always run)
+      - name: Assert metrics outputs are present
         env:
-          OUTCOME: ${{ steps.action.outcome }}
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
           OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
           DURATION_MS: ${{ steps.action.outputs.duration-ms }}
           CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
         run: |
-          echo "outcome: $OUTCOME"
           echo "input-tokens: $INPUT_TOKENS"
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          if [ "$OUTCOME" = "success" ]; then
-            # Metrics outputs should be set (even if zero)
-            if [ -z "$INPUT_TOKENS" ]; then
-              echo "FAIL: action succeeded but input-tokens output is empty"
-              exit 1
-            fi
-            if [ -z "$CACHE_HIT_RATIO" ]; then
-              echo "FAIL: action succeeded but cache-hit-ratio output is empty"
-              exit 1
-            fi
-            echo "PASS: action succeeded with all API key inputs accepted"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "PASS: action failed gracefully (sentinel repo or API resolution issue)"
-          else
-            echo "FAIL: unexpected outcome '$OUTCOME'"
+          # Under workflow_dispatch no AI steps fire, so tokens should be 0
+          if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: expected input-tokens to be set (got empty)"
             exit 1
           fi
+          if [ "$OUTPUT_TOKENS" != "0" ] && [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: expected output-tokens to be set (got empty)"
+            exit 1
+          fi
+          if [ "$DURATION_MS" != "0" ] && [ -z "$DURATION_MS" ]; then
+            echo "FAIL: expected duration-ms to be set (got empty)"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: expected cache-hit-ratio to be set"
+            exit 1
+          fi
+          echo "PASS: all metric outputs are present"

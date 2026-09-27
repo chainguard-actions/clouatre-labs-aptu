@@ -330,7 +330,7 @@ runs:
     - name: Cache aptu binary
       id: cache-aptu
       if: steps.check-skip.outputs.skip != 'true'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      uses: chainguard-actions/actions-cache@38c9e2f39b3b539d2c7bdb22ccc9cb381ee084b7 # v6
       with:
         path: ~/.local/bin/aptu
         key: aptu-${{ steps.resolve-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -428,7 +428,7 @@ runs:
           ARGS+=(--no-comment)
         fi
 
-        echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"
+        printf 'Running: aptu issue triage %s %s\n' "${ARGS[*]}" "$ISSUE_REF"
         aptu issue triage "${ARGS[@]}" "$ISSUE_REF"
     - name: Run aptu issue triage (scheduled batch)
       if: github.event_name == 'schedule' && steps.check-skip.outputs.skip != 'true'
@@ -471,7 +471,7 @@ runs:
         if [[ "$NO_COMMENT" == "true" ]]; then
           ARGS+=(--no-comment)
         fi
-        echo "Running: aptu issue triage ${ARGS[*]}"
+        printf 'Running: aptu issue triage %s\n' "${ARGS[*]}"
         aptu issue triage "${ARGS[@]}"
     - name: Run aptu PR label
       if: github.event_name == 'pull_request' || (github.event_name == 'repository_dispatch' && inputs.repo != '' && inputs['pull-number'] != '')
@@ -508,7 +508,7 @@ runs:
           ARGS+=(--dry-run)
         fi
 
-        echo "Running: aptu pr label ${ARGS[*]} $PR_REF"
+        printf 'Running: aptu pr label %s %s\n' "${ARGS[*]}" "$PR_REF"
         aptu pr label "${ARGS[@]}" "$PR_REF"
     - name: Run aptu PR review
       if: github.event_name == 'pull_request' || (github.event_name == 'repository_dispatch' && inputs.repo != '' && inputs['pull-number'] != '')
@@ -580,7 +580,7 @@ runs:
           ARGS+=(--instructions-file "$INSTRUCTIONS_FILE")
         fi
 
-        echo "Running: aptu pr review ${ARGS[*]} $PR_REF"
+        printf 'Running: aptu pr review %s %s\n' "${ARGS[*]}" "$PR_REF"
         aptu pr review "${ARGS[@]}" "$PR_REF"
     - name: Run aptu scan-security
       if: inputs.scan-path != '' || inputs.scan-security-diff != ''
@@ -614,10 +614,10 @@ runs:
           done < <(echo "$SCAN_EXCLUDE" | tr ',' '\n')
         fi
         if [[ -n "$SCAN_DIFF" ]]; then
-          echo "Running: aptu scan-security --diff $SCAN_DIFF --output github-annotations --sarif-output findings.sarif ${FAIL_ON_ARGS[*]} ${EXCLUDE_ARGS[*]}"
+          printf 'Running: aptu scan-security --diff %s --output github-annotations --sarif-output findings.sarif %s %s\n' "$SCAN_DIFF" "${FAIL_ON_ARGS[*]}" "${EXCLUDE_ARGS[*]}"
           aptu scan-security --diff "$SCAN_DIFF" --output github-annotations --sarif-output findings.sarif "${FAIL_ON_ARGS[@]}" "${EXCLUDE_ARGS[@]}"
         else
-          echo "Running: aptu scan-security $SCAN_PATH --output github-annotations --sarif-output findings.sarif ${FAIL_ON_ARGS[*]} ${EXCLUDE_ARGS[*]}"
+          printf 'Running: aptu scan-security %s --output github-annotations --sarif-output findings.sarif %s %s\n' "$SCAN_PATH" "${FAIL_ON_ARGS[*]}" "${EXCLUDE_ARGS[*]}"
           aptu scan-security "$SCAN_PATH" --output github-annotations --sarif-output findings.sarif "${FAIL_ON_ARGS[@]}" "${EXCLUDE_ARGS[@]}"
         fi
     - name: Upload SARIF report
@@ -648,7 +648,7 @@ runs:
         APTU_AI__OPENROUTER_ZDR: ${{ inputs.openrouter-zdr }}
       run: |
         set -e
-        echo "Running: aptu pr queue --repo $REPO"
+        printf 'Running: aptu pr queue --repo %s\n' "$REPO"
         aptu pr queue --repo "$REPO"
     - name: Aggregate metrics outputs
       id: metrics-aggregate
@@ -688,7 +688,7 @@ runs:
         fi
     - name: Upload token usage artifact
       if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: chainguard-actions/actions-upload-artifact@f9571ddcfab0329c68a1e92a4b612bee5d8e5042 # v7.0.1
       with:
         name: aptu-token-usage-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-token-usage.jsonl
@@ -696,7 +696,7 @@ runs:
         if-no-files-found: ignore
     - name: Upload review context artifact
       if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: chainguard-actions/actions-upload-artifact@f9571ddcfab0329c68a1e92a4b612bee5d8e5042 # v7.0.1
       with:
         name: aptu-review-context-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-review-context.jsonl

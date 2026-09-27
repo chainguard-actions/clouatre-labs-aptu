@@ -305,15 +305,15 @@ runs:
         ARGS=()
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS+=(--dry-run)
+          ARGS+=("--dry-run")
         fi
 
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          ARGS+=(--no-apply)
+          ARGS+=("--no-apply")
         fi
 
         if [[ "$NO_COMMENT" == "true" ]]; then
-          ARGS+=(--no-comment)
+          ARGS+=("--no-comment")
         fi
 
         echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"
@@ -341,21 +341,21 @@ runs:
         APTU_METRICS_FILE: ${{ runner.temp }}/aptu-token-usage.jsonl
       run: |
         set -e
-        ARGS=(--repo "$REPO")
+        ARGS=("--repo" "$REPO")
         if [[ -n "$SINCE" ]]; then
-          ARGS+=(--since "$SINCE")
+          ARGS+=("--since" "$SINCE")
         fi
         if [[ -n "$ISSUE_STATE" && "$ISSUE_STATE" != "open" ]]; then
-          ARGS+=(--state "$ISSUE_STATE")
+          ARGS+=("--state" "$ISSUE_STATE")
         fi
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS+=(--dry-run)
+          ARGS+=("--dry-run")
         fi
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          ARGS+=(--no-apply)
+          ARGS+=("--no-apply")
         fi
         if [[ "$NO_COMMENT" == "true" ]]; then
-          ARGS+=(--no-comment)
+          ARGS+=("--no-comment")
         fi
         echo "Running: aptu issue triage ${ARGS[*]}"
         aptu issue triage "${ARGS[@]}"
@@ -384,7 +384,7 @@ runs:
         ARGS=()
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS+=(--dry-run)
+          ARGS+=("--dry-run")
         fi
 
         echo "Running: aptu pr label ${ARGS[*]} $PR_REF"
@@ -418,28 +418,28 @@ runs:
         set -e
 
         PR_REF="${REPO}#${PR_NUMBER}"
-        ARGS=(--comment --force)
+        ARGS=("--comment" "--force")
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          ARGS+=(--dry-run)
+          ARGS+=("--dry-run")
         fi
 
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          ARGS+=(--no-apply)
+          ARGS+=("--no-apply")
         fi
 
         if [[ "$NO_COMMENT" == "true" ]]; then
-          ARGS+=(--no-comment)
+          ARGS+=("--no-comment")
         fi
 
         if [[ -n "$REPO_PATH" ]]; then
-          ARGS+=(--repo-path "$REPO_PATH")
+          ARGS+=("--repo-path" "$REPO_PATH")
         fi
         if [[ "$DEEP" == "true" && -n "$REPO_PATH" ]]; then
-          ARGS+=(--deep)
+          ARGS+=("--deep")
         fi
         if [[ -n "$INSTRUCTIONS_FILE" ]]; then
-          ARGS+=(--instructions-file "$INSTRUCTIONS_FILE")
+          ARGS+=("--instructions-file" "$INSTRUCTIONS_FILE")
         fi
 
         echo "Running: aptu pr review ${ARGS[*]} $PR_REF"
@@ -464,10 +464,10 @@ runs:
       run: |
         set -e
         if [[ -n "$SCAN_DIFF" ]]; then
-          echo "Running: aptu scan-security --diff \"$SCAN_DIFF\" --output sarif"
+          echo "Running: aptu scan-security --diff $SCAN_DIFF --output sarif"
           aptu scan-security --diff "$SCAN_DIFF" --output sarif
         else
-          echo "Running: aptu scan-security \"$SCAN_PATH\" --output sarif"
+          echo "Running: aptu scan-security $SCAN_PATH --output sarif"
           aptu scan-security "$SCAN_PATH" --output sarif
         fi
     - name: Run aptu pr queue

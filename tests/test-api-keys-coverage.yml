@@ -1,0 +1,57 @@
+name: Test API keys and instructions-file input coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          # AI provider API keys (all optional; passed here for input coverage)
+          anthropic-api-key: ''
+          cerebras-api-key: ''
+          gemini-api-key: ''
+          groq-api-key: ''
+          openrouter-api-key: ''
+          zai-api-key: ''
+          zenmux-api-key: ''
+          # PR review input (optional; passed here for input coverage)
+          instructions-file: ''
+          # Behavior flags
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          # Disable scan and pr-queue so no extra steps fire
+          scan-path: ''
+          pr-queue: 'false'
+
+      - name: Assert metrics outputs are set
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # Under workflow_dispatch no AI steps fire, so tokens should be 0
+          if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output not set"
+            exit 1
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ] && [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output not set"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output not set"
+            exit 1
+          fi
+          echo "PASS: all metric outputs are set"

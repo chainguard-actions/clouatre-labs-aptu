@@ -16,31 +16,26 @@ Action **clouatre-labs--aptu/v0.8.3** was hardened automatically. 2 finding(s) w
 
 ### script-injection (severity: high)
 
-Sub-rule (a): The 'Install aptu binary' step directly interpolates `${{ steps.resolve-version.outputs.version }}` inside a `run:` shell script: `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"`. Any `${{ ... }}` expression inside a `run:` block is a script-injection risk because YAML template substitution happens before the shell ever sees the value. `steps.*.outputs.*` is a workflow-controllable context and must be passed via an `env:` variable instead.
+Sub-rule (a): The 'Install aptu binary' step directly interpolates `${{ steps.resolve-version.outputs.version }}` inside a `run:` shell script. Any `${{ ... }}` expression interpolated directly into a shell command string is a script-injection risk — the YAML template substitution happens before the shell ever sees the value, so a malicious value could inject shell commands. The offending line is: `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"`
 
 Locations:
 
-- `action.yml:237`
+- `action.yml:233`
 
 ### script-injection (severity: high)
 
-Sub-rule (b): Multiple steps build a `$ARGS` string from user-controlled inputs and then expand it unquoted in shell commands. Unquoted variable expansion allows shell metacharacter injection (`;`, `|`, `&`, `$(...)`, etc.).
-
-- 'Run aptu issue triage (scheduled batch)': `ARGS="--repo $REPO"` (unquoted `$REPO`) and `aptu issue triage $ARGS` (unquoted `$ARGS` built from `$SINCE`, `$ISSUE_STATE`).
-- 'Run aptu issue triage': `aptu issue triage $ARGS "$ISSUE_REF"` (unquoted `$ARGS`).
-- 'Run aptu PR label': `aptu pr label $ARGS "$PR_REF"` (unquoted `$ARGS`).
-- 'Run aptu PR review': `ARGS="$ARGS --repo-path $REPO_PATH"` and `ARGS="$ARGS --instructions-file $INSTRUCTIONS_FILE"` (unquoted inputs), then `aptu pr review $ARGS "$PR_REF"` (unquoted `$ARGS`).
-
-All of `$REPO`, `$SINCE`, `$ISSUE_STATE`, `$REPO_PATH`, and `$INSTRUCTIONS_FILE` are sourced from `inputs.*` or `github.*` via `env:` and must be double-quoted at every expansion site.
+Sub-rule (b): Multiple `run:` steps build a `$ARGS` string by appending unquoted user-controlled env vars, then pass `$ARGS` unquoted to `aptu` command invocations. This allows shell metacharacter injection. Affected steps and variables:
+- 'Run aptu issue triage (scheduled batch)': `$SINCE` and `$ISSUE_STATE` (from `inputs.since` and `inputs.issue-state`) are appended unquoted to `$ARGS`, and `aptu issue triage $ARGS` is called without quoting `$ARGS`.
+- 'Run aptu PR review': `$REPO_PATH` (from `inputs.repo-path`) and `$INSTRUCTIONS_FILE` (from `inputs.instructions-file`) are appended unquoted to `$ARGS`, and `aptu pr review $ARGS "$PR_REF"` is called without quoting `$ARGS`.
+- 'Run aptu scan-security': `$SCAN_PATH` and `$SCAN_DIFF` (from `inputs.scan-path` and `inputs.scan-security-diff`) are used unquoted in `aptu scan-security $SCAN_PATH --output sarif` and in the echo statement.
+All these env vars hold values sourced from `inputs.*` and must be double-quoted wherever they are expanded.
 
 Locations:
 
-- `action.yml:295`
-- `action.yml:330`
+- `action.yml:313`
 - `action.yml:340`
-- `action.yml:365`
-- `action.yml:410`
-- `action.yml:415`
+- `action.yml:390`
+- `action.yml:420`
 
 ## Iteration Notes
 
@@ -50,15 +45,15 @@ Locations:
 
 **Notes:**
 
-Fixed two script-injection findings in action.yml:
+Fixed all script-injection findings in hardened/action/action.yml:
 
-1. Finding (a) line 237: Moved `${{ steps.resolve-version.outputs.version }}` from the `run:` block into the `env:` block as `APTU_VERSION: ${{ steps.resolve-version.outputs.version }}`. The shell script now uses `$APTU_VERSION` safely as an environment variable.
+1. 'Install aptu binary' step (line 233): Moved `${{ steps.resolve-version.outputs.version }}` from the run: shell script into the step's env: block as `APTU_VERSION`. The shell script now references `$APTU_VERSION` safely.
 
-2. Finding (b) multiple lines: Converted all string-concatenation `$ARGS` patterns to bash arrays (`ARGS=()`) across four steps:
-   - 'Run aptu issue triage': `ARGS=()` with `ARGS+=(--flag)` and `"${ARGS[@]}"`
-   - 'Run aptu issue triage (scheduled batch)': `ARGS+=(--repo "$REPO")`, `ARGS+=(--since "$SINCE")`, `ARGS+=(--state "$ISSUE_STATE")` — all values properly quoted
-   - 'Run aptu PR label': `ARGS=()` with `"${ARGS[@]}"`
-   - 'Run aptu PR review': `ARGS+=(--repo-path "$REPO_PATH")` and `ARGS+=(--instructions-file "$INSTRUCTIONS_FILE")` — all values properly quoted, and `"${ARGS[@]}"` for safe expansion
+2. 'Run aptu issue triage (scheduled batch)' step (line 313): Converted string-concatenation `$ARGS` to a bash array `ARGS=()`. `$SINCE` and `$ISSUE_STATE` are now properly double-quoted when appended (`ARGS+=(--since "$SINCE")`). Final invocation uses `"${ARGS[@]}"`.
 
-All user-controlled inputs are now properly quoted at every expansion site, preventing shell metacharacter injection.
+3. 'Run aptu PR review' step (line 340): Converted string-concatenation `$ARGS` to a bash array. `$REPO_PATH` and `$INSTRUCTIONS_FILE` are now properly double-quoted when appended. Final invocation uses `"${ARGS[@]}"`.
+
+4. 'Run aptu scan-security' step (lines 390/420): Fixed echo statements to properly quote `$SCAN_DIFF` and `$SCAN_PATH` (the aptu command invocations already had them quoted).
+
+5. Also fixed 'Run aptu issue triage' (non-scheduled) and 'Run aptu PR label' steps which had the same unquoted `$ARGS` pattern — converted to arrays for consistency and safety.
 

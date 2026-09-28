@@ -16,7 +16,7 @@ Action **clouatre-labs--aptu/v0.8.4** was hardened automatically. 2 finding(s) w
 
 ### script-injection (severity: high)
 
-Rule (a): A `steps.*.outputs.*` expression is directly interpolated inside a `run:` shell script. In the "Install aptu binary" step, the line `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"` injects the expression value directly into the shell before the shell ever sees it. Any `${{ ... }}` inside a `run:` block is a script-injection risk regardless of which context it reads from. Fix: pass the value via an `env:` variable (e.g. `APTU_VERSION: ${{ steps.resolve-version.outputs.version }}`) and reference `"$APTU_VERSION"` in the script.
+Sub-rule (a): A `${{ ... }}` expression is interpolated directly inside a `run:` shell script in the 'Install aptu binary' step. The line `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"` embeds a GitHub Actions expression directly into the shell command string before the shell ever sees it, bypassing any quoting. Any `${{ ... }}` inside a `run:` block is a script-injection risk regardless of the source context.
 
 Locations:
 
@@ -24,15 +24,14 @@ Locations:
 
 ### script-injection (severity: high)
 
-Rule (b): Multiple `run:` blocks expand `$ARGS` unquoted when invoking `aptu` commands. The `$ARGS` variable is built by appending values sourced from user-controlled inputs (`$SINCE` from `inputs.since`, `$ISSUE_STATE` from `inputs.issue-state`, `$REPO_PATH` from `inputs.repo-path`, `$INSTRUCTIONS_FILE` from `inputs.instructions-file`) without quoting. An unquoted expansion lets the shell parse metacharacters (`;`, `|`, `&`, `$(...)`, etc.) out of the value. Additionally, `aptu scan-security $SCAN_PATH` expands `$SCAN_PATH` (from `inputs.scan-path`) unquoted. All of these should be double-quoted: `aptu issue triage $ARGS` → `aptu issue triage $ARGS` with each component quoted, or restructured to use arrays. Affected steps: "Run aptu issue triage", "Run aptu issue triage (scheduled batch)", "Run aptu PR label", "Run aptu PR review", "Run aptu scan-security".
+Sub-rule (b): Multiple `run:` blocks expand `$ARGS` unquoted in the final command invocation (e.g. `aptu issue triage $ARGS "$ISSUE_REF"`, `aptu pr label $ARGS "$PR_REF"`, `aptu pr review $ARGS "$PR_REF"`, `aptu issue triage $ARGS`). The `$ARGS` variable is built by appending values sourced from user-controlled inputs without quoting: `$SINCE` (from `inputs.since`), `$ISSUE_STATE` (from `inputs.issue-state`), `$REPO_PATH` (from `inputs.repo-path`), and `$INSTRUCTIONS_FILE` (from `inputs.instructions-file`) are all concatenated into `$ARGS` unquoted. An attacker-supplied value containing shell metacharacters (`;`, `|`, `&`, `$(...)`, etc.) in any of these inputs would be word-split and interpreted by the shell when `$ARGS` is expanded without double-quotes.
 
 Locations:
 
-- `action.yml:275`
-- `action.yml:312`
-- `action.yml:337`
-- `action.yml:383`
-- `action.yml:407`
+- `action.yml:330`
+- `action.yml:370`
+- `action.yml:400`
+- `action.yml:450`
 
 ## Iteration Notes
 
@@ -44,7 +43,7 @@ Locations:
 
 Fixed two script-injection findings in hardened/action/action.yml:
 
-1. Line 261 (Install aptu binary step): Moved `${{ steps.resolve-version.outputs.version }}` from the `run:` block into the `env:` block as `APTU_VERSION: ${{ steps.resolve-version.outputs.version }}`. The script now references `$APTU_VERSION` safely.
+1. Line 261 ('Install aptu binary' step): Moved `${{ steps.resolve-version.outputs.version }}` from the `run:` block into the step's `env:` block as `APTU_VERSION: ${{ steps.resolve-version.outputs.version }}`. The shell script now references it as `$APTU_VERSION`.
 
-2. Lines 275, 312, 337, 383 (Run aptu issue triage, Run aptu issue triage scheduled batch, Run aptu PR label, Run aptu PR review): Converted all string-based `ARGS` accumulation patterns to bash arrays (`ARGS=()`, `ARGS+=(...)`). All user-controlled values (`$SINCE`, `$ISSUE_STATE`, `$REPO_PATH`, `$INSTRUCTIONS_FILE`) are now properly double-quoted when added to the array. Final command invocations use `"${ARGS[@]}"` for safe expansion. Line 407 (scan-security) already had `$SCAN_PATH` properly double-quoted in the actual command.
+2. Lines 330, 370, 400, 450 (four `run:` blocks): Converted all unquoted `$ARGS` string-concatenation patterns to bash arrays. Each step now uses `args=()` and appends flags with `args+=(--flag "$VALUE")`, then invokes the command with `"${args[@]}"`. This ensures user-controlled inputs (`$SINCE`, `$ISSUE_STATE`, `$REPO_PATH`, `$INSTRUCTIONS_FILE`) are always properly quoted and cannot be interpreted as shell metacharacters.
 

@@ -11,18 +11,18 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: "dummy-anthropic-key"
-          cerebras-api-key: "dummy-cerebras-key"
-          gemini-api-key: "dummy-gemini-key"
-          groq-api-key: "dummy-groq-key"
-          openrouter-api-key: "dummy-openrouter-key"
-          zai-api-key: "dummy-zai-key"
-          zenmux-api-key: "dummy-zenmux-key"
+          anthropic-api-key: "placeholder-anthropic-key"
+          cerebras-api-key: "placeholder-cerebras-key"
+          gemini-api-key: "placeholder-gemini-key"
+          groq-api-key: "placeholder-groq-key"
+          openrouter-api-key: "placeholder-openrouter-key"
+          zai-api-key: "placeholder-zai-key"
+          zenmux-api-key: "placeholder-zenmux-key"
           instructions-file: ".github/instructions/pr-review.md"
           dry-run: "true"
           no-comment: "true"
           apply-labels: "false"
-          pr-queue: "false"
+          skip-labeled: "false"
 
       - name: Assert metrics outputs are present
         env:
@@ -36,21 +36,21 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # Under workflow_dispatch no AI calls are made, so tokens should be 0
-          if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
-            echo "FAIL: expected input-tokens to be set"
+          # Under workflow_dispatch, no AI steps run, so metrics should be zero defaults
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
             exit 1
           fi
-          if [ "$OUTPUT_TOKENS" != "0" ] && [ -z "$OUTPUT_TOKENS" ]; then
-            echo "FAIL: expected output-tokens to be set"
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
             exit 1
           fi
-          if [ "$DURATION_MS" != "0" ] && [ -z "$DURATION_MS" ]; then
-            echo "FAIL: expected duration-ms to be set"
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$DURATION_MS'"
             exit 1
           fi
-          if [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: expected cache-hit-ratio to be set"
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
             exit 1
           fi
-          echo "PASS: all metrics outputs are present"
+          echo "PASS: all metrics outputs are correct defaults"

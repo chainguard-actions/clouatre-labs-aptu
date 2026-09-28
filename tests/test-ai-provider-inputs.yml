@@ -12,22 +12,20 @@ jobs:
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'test-anthropic-key'
-          cerebras-api-key: 'test-cerebras-key'
-          gemini-api-key: 'test-gemini-key'
-          groq-api-key: 'test-groq-key'
-          openrouter-api-key: 'test-openrouter-key'
-          zai-api-key: 'test-zai-key'
-          zenmux-api-key: 'test-zenmux-key'
-          instructions-file: 'AGENTS.md'
+          anthropic-api-key: 'sk-ant-placeholder'
+          cerebras-api-key: 'csk-placeholder'
+          gemini-api-key: 'AIza-placeholder'
+          groq-api-key: 'gsk_placeholder'
+          openrouter-api-key: 'sk-or-placeholder'
+          zai-api-key: 'zai-placeholder'
+          zenmux-api-key: 'zmx-placeholder'
+          instructions-file: '.github/instructions/pr-review.md'
           dry-run: 'true'
           no-comment: 'true'
           apply-labels: 'false'
-          skip-labeled: 'false'
-          provider: 'openrouter'
-          model: 'mistralai/mistral-small-2603'
+          pr-queue: 'false'
 
-      - name: Assert action ran (inputs accepted, or failed gracefully on sentinel repo)
+      - name: Assert action ran and produced metrics outputs
         env:
           OUTCOME: ${{ steps.action.outcome }}
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
@@ -40,10 +38,16 @@ jobs:
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
           if [ "$OUTCOME" = "success" ]; then
-            echo "PASS: action succeeded with all AI provider inputs"
+            # Under workflow_dispatch no AI calls are made, so metrics should be 0/n/a
+            if [ -z "$INPUT_TOKENS" ] && [ -z "$OUTPUT_TOKENS" ] && [ -z "$DURATION_MS" ]; then
+              echo "FAIL: action succeeded but all metric outputs are empty"
+              exit 1
+            fi
+            echo "PASS: action succeeded with metrics outputs present"
           elif [ "$OUTCOME" = "failure" ]; then
-            echo "PASS: action failed gracefully (expected on sentinel repo — API calls cannot succeed)"
+            echo "PASS: action failed gracefully (e.g. could not resolve aptu release or sentinel repo)"
           else
             echo "FAIL: unexpected outcome '$OUTCOME'"
             exit 1

@@ -1,4 +1,4 @@
-name: Test AI provider API key inputs coverage
+name: Test AI provider API keys coverage
 on:
   workflow_dispatch:
 jobs:
@@ -12,21 +12,21 @@ jobs:
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'test-anthropic-key'
-          cerebras-api-key: 'test-cerebras-key'
-          gemini-api-key: 'test-gemini-key'
-          groq-api-key: 'test-groq-key'
-          openrouter-api-key: 'test-openrouter-key'
-          zai-api-key: 'test-zai-key'
-          zenmux-api-key: 'test-zenmux-key'
-          instructions-file: 'AGENTS.md'
-          dry-run: 'true'
-          skip-labeled: 'false'
-          no-comment: 'true'
-          apply-labels: 'false'
-          pr-queue: 'false'
+          anthropic-api-key: "dummy-anthropic-key"
+          cerebras-api-key: "dummy-cerebras-key"
+          gemini-api-key: "dummy-gemini-key"
+          groq-api-key: "dummy-groq-key"
+          openrouter-api-key: "dummy-openrouter-key"
+          zai-api-key: "dummy-zai-key"
+          zenmux-api-key: "dummy-zenmux-key"
+          instructions-file: ""
+          dry-run: "true"
+          no-comment: "true"
+          apply-labels: "false"
+          skip-labeled: "false"
+          pr-queue: "false"
 
-      - name: Assert action ran with all AI provider key inputs
+      - name: Assert action ran and metrics outputs are set
         env:
           OUTCOME: ${{ steps.action.outcome }}
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
@@ -39,11 +39,20 @@ jobs:
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-          if [ "$OUTCOME" = "success" ]; then
-            echo "PASS: action succeeded"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "PASS: action failed gracefully (expected under harness — sentinel repo or no matching event)"
+
+          # The action either succeeds (binary installed, no AI steps fired under workflow_dispatch)
+          # or fails gracefully (sentinel repo / API rate limit). Either way, metrics outputs
+          # must be set by the always() metrics-aggregate step.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action completed with outcome '$OUTCOME'"
           else
             echo "FAIL: unexpected outcome '$OUTCOME'"
             exit 1
           fi
+
+          # cache-hit-ratio is always set (either a percent or "n/a")
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is empty"
+            exit 1
+          fi
+          echo "PASS: cache-hit-ratio='$CACHE_HIT_RATIO'"

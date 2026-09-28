@@ -12,19 +12,19 @@ jobs:
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: ''
-          cerebras-api-key: ''
-          gemini-api-key: ''
-          groq-api-key: ''
-          openrouter-api-key: ''
-          zai-api-key: ''
-          zenmux-api-key: ''
-          dry-run: 'true'
-          no-comment: 'true'
-          apply-labels: 'false'
-          skip-labeled: 'false'
+          anthropic-api-key: "dummy-anthropic-key"
+          cerebras-api-key: "dummy-cerebras-key"
+          gemini-api-key: "dummy-gemini-key"
+          groq-api-key: "dummy-groq-key"
+          openrouter-api-key: "dummy-openrouter-key"
+          zai-api-key: "dummy-zai-key"
+          zenmux-api-key: "dummy-zenmux-key"
+          dry-run: "true"
+          no-comment: "true"
+          apply-labels: "false"
+          pr-queue: "false"
 
-      - name: Assert action ran (metrics outputs present or failed gracefully)
+      - name: Assert action ran (succeeded or failed gracefully)
         env:
           OUTCOME: ${{ steps.action.outcome }}
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
@@ -37,8 +37,10 @@ jobs:
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
-            echo "PASS: action ran (outcome=$OUTCOME)"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action succeeded"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (expected under harness with sentinel repo or unavailable upstream)"
           else
             echo "FAIL: unexpected outcome '$OUTCOME'"
             exit 1

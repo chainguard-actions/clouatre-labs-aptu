@@ -6,45 +6,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
       - id: action
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'sk-ant-test-placeholder'
-          cerebras-api-key: 'csk-test-placeholder'
-          gemini-api-key: 'AIza-test-placeholder'
-          groq-api-key: 'gsk_test-placeholder'
-          openrouter-api-key: 'sk-or-test-placeholder'
-          zai-api-key: 'zai-test-placeholder'
-          zenmux-api-key: 'zmx-test-placeholder'
-          provider: 'openrouter'
-          model: 'mistralai/mistral-small-2603'
+          anthropic-api-key: ''
+          cerebras-api-key: ''
+          gemini-api-key: ''
+          groq-api-key: ''
+          openrouter-api-key: ''
+          zai-api-key: ''
+          zenmux-api-key: ''
           dry-run: 'true'
           no-comment: 'true'
-          apply-labels: 'false'
           skip-labeled: 'false'
-        continue-on-error: true
-
       - name: Assert metrics outputs are present
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
           OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
           DURATION_MS: ${{ steps.action.outputs.duration-ms }}
           CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
-          OUTCOME: ${{ steps.action.outcome }}
         run: |
-          echo "outcome: $OUTCOME"
           echo "input-tokens: $INPUT_TOKENS"
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-          if [ "$OUTCOME" = "failure" ]; then
-            echo "PASS: action failed gracefully (sentinel repo or no matching event)"
-          elif [ "$OUTCOME" = "success" ]; then
-            # Under workflow_dispatch no AI steps fire; metrics should be zero/n/a
-            echo "PASS: action completed successfully"
-          else
-            echo "FAIL: unexpected outcome '$OUTCOME'"
+          # Under workflow_dispatch with no issue/PR event, no AI calls are made
+          # so metrics should be zero/n/a — just verify the outputs are set (not empty)
+          if [ -z "$INPUT_TOKENS" ] && [ -z "$OUTPUT_TOKENS" ] && [ -z "$DURATION_MS" ]; then
+            echo "FAIL: all metric outputs are empty"
             exit 1
           fi
+          echo "PASS: metric outputs are present"

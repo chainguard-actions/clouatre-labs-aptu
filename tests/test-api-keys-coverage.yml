@@ -11,23 +11,17 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          # AI provider API keys — passed for input coverage; no AI steps fire under workflow_dispatch
-          anthropic-api-key: 'sk-ant-test-placeholder'
-          cerebras-api-key: 'csk-test-placeholder'
-          gemini-api-key: 'AIza-test-placeholder'
-          groq-api-key: 'gsk_test-placeholder'
-          openrouter-api-key: 'sk-or-test-placeholder'
-          zai-api-key: 'zai-test-placeholder'
-          zenmux-api-key: 'zmx-test-placeholder'
-          # instructions-file — passed for input coverage; PR review step does not fire under workflow_dispatch
-          instructions-file: 'AGENTS.md'
-          # Behavior flags
+          anthropic-api-key: 'sk-ant-placeholder'
+          cerebras-api-key: 'csk-placeholder'
+          gemini-api-key: 'AIza-placeholder'
+          groq-api-key: 'gsk_placeholder'
+          openrouter-api-key: 'sk-or-placeholder'
+          zai-api-key: 'zai-placeholder'
+          zenmux-api-key: 'zmx-placeholder'
+          instructions-file: ''
           dry-run: 'true'
           no-comment: 'true'
           apply-labels: 'false'
-          skip-labeled: 'false'
-          # Disable scan and pr-queue so no operational steps run
-          scan-path: ''
           pr-queue: 'false'
 
       - name: Assert metrics outputs are present
@@ -42,7 +36,7 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # Under workflow_dispatch no AI steps fire, so tokens should be 0
+          # Under workflow_dispatch no AI calls are made, so tokens should be 0
           if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
             echo "FAIL: input-tokens output missing"
             exit 1

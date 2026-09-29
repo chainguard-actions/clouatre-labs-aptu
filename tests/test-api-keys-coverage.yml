@@ -12,21 +12,24 @@ jobs:
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: "dummy-anthropic-key"
-          cerebras-api-key: "dummy-cerebras-key"
-          gemini-api-key: "dummy-gemini-key"
-          groq-api-key: "dummy-groq-key"
-          openrouter-api-key: "dummy-openrouter-key"
-          zai-api-key: "dummy-zai-key"
-          zenmux-api-key: "dummy-zenmux-key"
-          instructions-file: ".github/instructions/pr-review.md"
-          dry-run: "true"
-          no-comment: "true"
-          apply-labels: "false"
-          fallback-provider: "openrouter"
-          fallback-model: "inception/mercury-2"
+          # AI provider API keys (all covered in this test)
+          anthropic-api-key: 'dummy-anthropic-key'
+          cerebras-api-key: 'dummy-cerebras-key'
+          gemini-api-key: 'dummy-gemini-key'
+          groq-api-key: 'dummy-groq-key'
+          openrouter-api-key: 'dummy-openrouter-key'
+          zai-api-key: 'dummy-zai-key'
+          zenmux-api-key: 'dummy-zenmux-key'
+          # PR review input
+          instructions-file: '.github/instructions/pr-review.md'
+          # Behavior flags
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          skip-labeled: 'false'
+          # No scan-path, no pr-queue — only check-skip + metrics steps fire under workflow_dispatch
 
-      - name: Assert metrics outputs are set
+      - name: Assert metrics outputs are set (defaults when no AI calls made)
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
           OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
@@ -40,10 +43,9 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # The action either succeeds (no matching event, metrics default to 0)
-          # or fails gracefully (sentinel repo / API resolution issue).
-          # In both cases the metrics-aggregate step runs with if: always() and
-          # sets the outputs. We verify the outputs are present and numeric/known.
+          # The action may succeed or fail (sentinel repo may cause resolve-version to fail
+          # or the binary install may fail). Either way, metrics-aggregate runs with if: always()
+          # and should emit outputs.
           if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
             echo "PASS: action ran (outcome=$OUTCOME)"
           else
@@ -51,9 +53,10 @@ jobs:
             exit 1
           fi
 
-          # cache-hit-ratio should be either "n/a" or a percentage
+          # Metrics outputs should be set (either 0 or a numeric value)
+          # cache-hit-ratio is either "n/a" or a percentage
           if [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: cache-hit-ratio output is empty"
+            echo "FAIL: cache-hit-ratio output is empty (metrics-aggregate did not run)"
             exit 1
           fi
-          echo "PASS: cache-hit-ratio='$CACHE_HIT_RATIO'"
+          echo "PASS: metrics outputs are set"

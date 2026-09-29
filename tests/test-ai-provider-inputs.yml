@@ -11,21 +11,22 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          # AI provider API keys (all covered here)
-          anthropic-api-key: 'dummy-anthropic-key'
-          cerebras-api-key: 'dummy-cerebras-key'
-          gemini-api-key: 'dummy-gemini-key'
-          groq-api-key: 'dummy-groq-key'
-          openrouter-api-key: 'dummy-openrouter-key'
-          zai-api-key: 'dummy-zai-key'
-          zenmux-api-key: 'dummy-zenmux-key'
-          # PR review input
-          instructions-file: ''
-          # Use dry-run to avoid any side effects
-          dry-run: 'true'
-          # No AI calls will fire under workflow_dispatch, so provider doesn't matter
-          provider: 'openrouter'
-          model: 'mistralai/mistral-small-2603'
+          # AI provider API keys (all optional; no AI calls fire under workflow_dispatch)
+          anthropic-api-key: 'placeholder-anthropic-key'
+          cerebras-api-key: 'placeholder-cerebras-key'
+          gemini-api-key: 'placeholder-gemini-key'
+          groq-api-key: 'placeholder-groq-key'
+          openrouter-api-key: 'placeholder-openrouter-key'
+          zai-api-key: 'placeholder-zai-key'
+          zenmux-api-key: 'placeholder-zenmux-key'
+          # instructions-file input (file need not exist since PR review step won't fire)
+          instructions-file: '.github/instructions/pr-review.md'
+          # Disable fallback to avoid writing config with placeholder keys
+          fallback-provider: ''
+          fallback-model: ''
+          # Ensure no AI steps fire
+          pr-queue: 'false'
+          dry-run: 'false'
 
       - name: Assert metrics outputs are set
         env:

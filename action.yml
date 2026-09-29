@@ -302,22 +302,22 @@ runs:
         set -e
 
         ISSUE_REF="${REPO}#${ISSUE_NUMBER}"
-        args=()
+        ARGS=()
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          args+=(--dry-run)
+          ARGS+=(--dry-run)
         fi
 
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          args+=(--no-apply)
+          ARGS+=(--no-apply)
         fi
 
         if [[ "$NO_COMMENT" == "true" ]]; then
-          args+=(--no-comment)
+          ARGS+=(--no-comment)
         fi
 
-        echo "Running: aptu issue triage ${args[*]} $ISSUE_REF"
-        aptu issue triage "${args[@]}" "$ISSUE_REF"
+        echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"
+        aptu issue triage "${ARGS[@]}" "$ISSUE_REF"
     - name: Run aptu issue triage (scheduled batch)
       if: github.event_name == 'schedule' && steps.check-skip.outputs.skip != 'true'
       shell: bash
@@ -341,24 +341,24 @@ runs:
         APTU_METRICS_FILE: ${{ runner.temp }}/aptu-token-usage.jsonl
       run: |
         set -e
-        args=(--repo "$REPO")
+        ARGS=(--repo "$REPO")
         if [[ -n "$SINCE" ]]; then
-          args+=(--since "$SINCE")
+          ARGS+=(--since "$SINCE")
         fi
         if [[ -n "$ISSUE_STATE" && "$ISSUE_STATE" != "open" ]]; then
-          args+=(--state "$ISSUE_STATE")
+          ARGS+=(--state "$ISSUE_STATE")
         fi
         if [[ "$DRY_RUN" == "true" ]]; then
-          args+=(--dry-run)
+          ARGS+=(--dry-run)
         fi
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          args+=(--no-apply)
+          ARGS+=(--no-apply)
         fi
         if [[ "$NO_COMMENT" == "true" ]]; then
-          args+=(--no-comment)
+          ARGS+=(--no-comment)
         fi
-        echo "Running: aptu issue triage ${args[*]}"
-        aptu issue triage "${args[@]}"
+        echo "Running: aptu issue triage ${ARGS[*]}"
+        aptu issue triage "${ARGS[@]}"
     - name: Run aptu PR label
       if: github.event_name == 'pull_request'
       shell: bash
@@ -381,14 +381,14 @@ runs:
         set -e
 
         PR_REF="${REPO}#${PR_NUMBER}"
-        args=()
+        ARGS=()
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          args+=(--dry-run)
+          ARGS+=(--dry-run)
         fi
 
-        echo "Running: aptu pr label ${args[*]} $PR_REF"
-        aptu pr label "${args[@]}" "$PR_REF"
+        echo "Running: aptu pr label ${ARGS[*]} $PR_REF"
+        aptu pr label "${ARGS[@]}" "$PR_REF"
     - name: Run aptu PR review
       if: github.event_name == 'pull_request'
       continue-on-error: true # Non-blocking - AI review is advisory
@@ -418,32 +418,32 @@ runs:
         set -e
 
         PR_REF="${REPO}#${PR_NUMBER}"
-        args=(--comment --force)
+        ARGS=(--comment --force)
 
         if [[ "$DRY_RUN" == "true" ]]; then
-          args+=(--dry-run)
+          ARGS+=(--dry-run)
         fi
 
         if [[ "$APPLY_LABELS" == "false" ]]; then
-          args+=(--no-apply)
+          ARGS+=(--no-apply)
         fi
 
         if [[ "$NO_COMMENT" == "true" ]]; then
-          args+=(--no-comment)
+          ARGS+=(--no-comment)
         fi
 
         if [[ -n "$REPO_PATH" ]]; then
-          args+=(--repo-path "$REPO_PATH")
+          ARGS+=(--repo-path "$REPO_PATH")
         fi
         if [[ "$DEEP" == "true" && -n "$REPO_PATH" ]]; then
-          args+=(--deep)
+          ARGS+=(--deep)
         fi
         if [[ -n "$INSTRUCTIONS_FILE" ]]; then
-          args+=(--instructions-file "$INSTRUCTIONS_FILE")
+          ARGS+=(--instructions-file "$INSTRUCTIONS_FILE")
         fi
 
-        echo "Running: aptu pr review ${args[*]} $PR_REF"
-        aptu pr review "${args[@]}" "$PR_REF"
+        echo "Running: aptu pr review ${ARGS[*]} $PR_REF"
+        aptu pr review "${ARGS[@]}" "$PR_REF"
     - name: Run aptu scan-security
       if: inputs.scan-path != '' || inputs.scan-security-diff != ''
       continue-on-error: true

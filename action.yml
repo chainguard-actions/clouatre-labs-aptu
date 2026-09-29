@@ -464,7 +464,7 @@ runs:
       run: |
         set -e
         if [[ -n "$SCAN_DIFF" ]]; then
-          echo "Running: aptu scan-security --diff \"$SCAN_DIFF\" --output sarif"
+          echo "Running: aptu scan-security --diff $SCAN_DIFF --output sarif"
           aptu scan-security --diff "$SCAN_DIFF" --output sarif
         else
           echo "Running: aptu scan-security $SCAN_PATH --output sarif"

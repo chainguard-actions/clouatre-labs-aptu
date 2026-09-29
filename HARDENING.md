@@ -16,22 +16,22 @@ Action **clouatre-labs--aptu/v0.8.6** was hardened automatically. 2 finding(s) w
 
 ### script-injection (severity: high)
 
-Sub-rule (a): The 'Install aptu binary' step directly interpolates `${{ steps.resolve-version.outputs.version }}` inside a `run:` shell command string. The `steps.*.outputs.*` context is workflow-controllable and flows through YAML template substitution before the shell parses it, enabling script injection. The offending line is: `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"`
+Rule (a): In the 'Install aptu binary' step, the expression `${{ steps.resolve-version.outputs.version }}` is directly interpolated inside the `run:` shell script: `APTU_VERSION="${{ steps.resolve-version.outputs.version }}"`. The `steps.*.outputs.*` context is workflow-controllable and must not be embedded directly in shell commands — it should be passed via an `env:` variable and then double-quoted in the script.
 
 Locations:
 
-- `action.yml:232`
+- `action.yml:233`
 
 ### script-injection (severity: high)
 
-Sub-rule (b): Multiple steps build a `$ARGS` shell variable by appending unquoted values sourced from workflow-controllable inputs (`$SINCE` from inputs.since, `$ISSUE_STATE` from inputs.issue-state, `$REPO_PATH` from inputs.repo-path, `$INSTRUCTIONS_FILE` from inputs.instructions-file), then invoke commands with the unquoted `$ARGS` variable (e.g. `aptu issue triage $ARGS`, `aptu pr review $ARGS`). An attacker-controlled input containing shell metacharacters (`;`, `|`, `&`, `$(...)`) would be word-split and executed by the shell. Affected steps: 'Run aptu issue triage', 'Run aptu issue triage (scheduled batch)', 'Run aptu PR label', 'Run aptu PR review'.
+Rule (b): Multiple `run:` steps build an `$ARGS` string from `inputs.*`-sourced env vars (e.g. `$DRY_RUN`, `$APPLY_LABELS`, `$NO_COMMENT`, `$REPO_PATH`, `$INSTRUCTIONS_FILE`) and then invoke `aptu ... $ARGS` with `$ARGS` unquoted, allowing shell metacharacter injection. Additionally, the scheduled batch triage step uses `ARGS="--repo $REPO"` with `$REPO` (from `github.repository`) unquoted. Offending lines include: `aptu issue triage $ARGS "$ISSUE_REF"`, `aptu issue triage $ARGS`, `aptu pr label $ARGS "$PR_REF"`, `aptu pr review $ARGS "$PR_REF"`.
 
 Locations:
 
-- `action.yml:302`
+- `action.yml:286`
+- `action.yml:316`
 - `action.yml:340`
-- `action.yml:374`
-- `action.yml:430`
+- `action.yml:390`
 
 ## Iteration Notes
 
@@ -41,9 +41,9 @@ Locations:
 
 **Notes:**
 
-Fixed two script-injection findings in hardened/action/action.yml:
+Fixed two script-injection findings in action.yml:
 
-1. Line 232 ('Install aptu binary' step): Moved `${{ steps.resolve-version.outputs.version }}` from the inline run: shell string into the step's env: block as `APTU_VERSION`. The shell script now references `$APTU_VERSION` as a plain environment variable, preventing YAML template substitution from injecting attacker-controlled content directly into the shell command.
+1. 'Install aptu binary' step (line 233): Moved `${{ steps.resolve-version.outputs.version }}` from inline shell interpolation to the step's `env:` block as `APTU_VERSION`. Removed the inline `APTU_VERSION="${{ ... }}"` assignment from the run script.
 
-2. Lines 302, 340, 374, 430 (four 'Run aptu ...' steps): Replaced the unquoted string-based `$ARGS` pattern with bash arrays (`ARGS=()`, `ARGS+=(--flag)`, `"${ARGS[@]}"`). User-controlled inputs ($SINCE, $ISSUE_STATE, $REPO_PATH, $INSTRUCTIONS_FILE) are now properly quoted as individual array elements, preventing shell metacharacters from being interpreted as shell commands.
+2. Four steps using unquoted `$ARGS` string expansion (lines 286, 316, 340, 390): Converted all four steps ('Run aptu issue triage', 'Run aptu issue triage (scheduled batch)', 'Run aptu PR label', 'Run aptu PR review') from string-based ARGS building to bash arrays. Each flag is now appended as a separate array element (e.g., `ARGS+=(--dry-run)`, `ARGS+=(--repo "$REPO")`), and commands use `"${ARGS[@]}"` for safe, properly-quoted expansion. This prevents shell metacharacter injection from workflow-controllable values like `$REPO`, `$SINCE`, `$ISSUE_STATE`, `$REPO_PATH`, and `$INSTRUCTIONS_FILE`.
 

@@ -11,20 +11,20 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: "test-anthropic-key"
-          cerebras-api-key: "test-cerebras-key"
-          gemini-api-key: "test-gemini-key"
-          groq-api-key: "test-groq-key"
-          openrouter-api-key: "test-openrouter-key"
-          zai-api-key: "test-zai-key"
-          zenmux-api-key: "test-zenmux-key"
-          instructions-file: ""
-          dry-run: "true"
-          no-comment: "true"
-          apply-labels: "false"
-          pr-queue: "false"
+          anthropic-api-key: 'test-anthropic-key'
+          cerebras-api-key: 'test-cerebras-key'
+          gemini-api-key: 'test-gemini-key'
+          groq-api-key: 'test-groq-key'
+          openrouter-api-key: 'test-openrouter-key'
+          zai-api-key: 'test-zai-key'
+          zenmux-api-key: 'test-zenmux-key'
+          instructions-file: '.github/instructions/pr-review.md'
+          dry-run: 'true'
+          no-comment: 'true'
+          skip-labeled: 'false'
+          pr-queue: 'false'
 
-      - name: Assert metrics outputs are set
+      - name: Assert metrics outputs are present
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
           OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
@@ -36,21 +36,21 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # Under workflow_dispatch no AI steps fire, so metrics default to 0/n/a
-          if [ -z "$INPUT_TOKENS" ]; then
-            echo "FAIL: input-tokens output is empty"
+          # Under workflow_dispatch no AI steps fire, so tokens should be 0
+          if [ "$INPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
             exit 1
           fi
-          if [ -z "$OUTPUT_TOKENS" ]; then
-            echo "FAIL: output-tokens output is empty"
+          if [ "$OUTPUT_TOKENS" != "0" ]; then
+            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
             exit 1
           fi
-          if [ -z "$DURATION_MS" ]; then
-            echo "FAIL: duration-ms output is empty"
+          if [ "$DURATION_MS" != "0" ]; then
+            echo "FAIL: expected duration-ms=0, got '$DURATION_MS'"
             exit 1
           fi
-          if [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: cache-hit-ratio output is empty"
+          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
+            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
             exit 1
           fi
-          echo "PASS: all metric outputs are set"
+          echo "PASS: all metrics outputs are present and correct for a no-op run"

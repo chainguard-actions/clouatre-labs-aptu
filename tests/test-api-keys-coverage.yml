@@ -11,18 +11,21 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'test-anthropic-key'
-          cerebras-api-key: 'test-cerebras-key'
-          gemini-api-key: 'test-gemini-key'
-          groq-api-key: 'test-groq-key'
-          openrouter-api-key: 'test-openrouter-key'
-          zai-api-key: 'test-zai-key'
-          zenmux-api-key: 'test-zenmux-key'
-          instructions-file: 'AGENTS.md'
+          # AI provider API keys (all covered here)
+          anthropic-api-key: 'dummy-anthropic-key'
+          cerebras-api-key: 'dummy-cerebras-key'
+          gemini-api-key: 'dummy-gemini-key'
+          groq-api-key: 'dummy-groq-key'
+          openrouter-api-key: 'dummy-openrouter-key'
+          zai-api-key: 'dummy-zai-key'
+          zenmux-api-key: 'dummy-zenmux-key'
+          # PR review options
+          instructions-file: ''
+          # Use dry-run to avoid making real changes
           dry-run: 'true'
-          skip-labeled: 'false'
-          no-comment: 'true'
-          apply-labels: 'false'
+          # Disable fallback to avoid unnecessary config
+          fallback-provider: ''
+          fallback-model: ''
 
       - name: Assert metrics outputs are present
         env:
@@ -35,9 +38,15 @@ jobs:
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-          # Metrics outputs should always be set (even when no AI calls are made)
-          if [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: cache-hit-ratio output was not set"
+
+          # On workflow_dispatch with no issues/PR event, no AI calls are made.
+          # Metrics should be zero/n/a (no JSONL file written).
+          if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: expected input-tokens to be set"
+            exit 1
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ] && [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: expected cache-hit-ratio to be set"
             exit 1
           fi
           echo "PASS: all metric outputs are present"

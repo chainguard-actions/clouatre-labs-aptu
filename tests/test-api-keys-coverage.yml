@@ -7,29 +7,22 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Create a dummy instructions file
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.github/instructions"
-          echo "# PR Review Instructions" > "$GITHUB_WORKSPACE/.github/instructions/pr-review.md"
-          echo "Review all changes carefully." >> "$GITHUB_WORKSPACE/.github/instructions/pr-review.md"
-
       - id: action
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: "dummy-anthropic-key"
-          cerebras-api-key: "dummy-cerebras-key"
-          gemini-api-key: "dummy-gemini-key"
-          groq-api-key: "dummy-groq-key"
-          openrouter-api-key: "dummy-openrouter-key"
-          zai-api-key: "dummy-zai-key"
-          zenmux-api-key: "dummy-zenmux-key"
-          instructions-file: ".github/instructions/pr-review.md"
-          dry-run: 'true'
-          no-comment: 'true'
-          apply-labels: 'false'
-          pr-queue: 'false'
-          scan-path: ''
+          anthropic-api-key: "placeholder-anthropic-key"
+          cerebras-api-key: "placeholder-cerebras-key"
+          gemini-api-key: "placeholder-gemini-key"
+          groq-api-key: "placeholder-groq-key"
+          openrouter-api-key: "placeholder-openrouter-key"
+          zai-api-key: "placeholder-zai-key"
+          zenmux-api-key: "placeholder-zenmux-key"
+          instructions-file: "hardened/tests/fixtures/pr-review-instructions.md"
+          dry-run: "true"
+          no-comment: "true"
+          apply-labels: "false"
+          pr-queue: "false"
 
       - name: Assert metrics outputs are present
         env:
@@ -43,9 +36,17 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # Metrics aggregate always runs; outputs should be set (0 or n/a when no AI calls made)
-          if [ -z "$INPUT_TOKENS" ] && [ -z "$OUTPUT_TOKENS" ] && [ -z "$DURATION_MS" ] && [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: all metric outputs are empty"
+          # Under workflow_dispatch no AI steps fire, so tokens should be 0
+          if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output missing"
             exit 1
           fi
-          echo "PASS: metric outputs are present"
+          if [ "$OUTPUT_TOKENS" != "0" ] && [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output missing"
+            exit 1
+          fi
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output missing"
+            exit 1
+          fi
+          echo "PASS: all metric outputs present"

@@ -1,4 +1,4 @@
-name: Test AI provider API keys inputs
+name: Test instructions-file input
 on:
   workflow_dispatch:
 jobs:
@@ -7,18 +7,18 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Create a dummy instructions file
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.github/instructions"
+          echo "# PR Review Instructions" > "$GITHUB_WORKSPACE/.github/instructions/pr-review.md"
+          echo "Review all PRs carefully." >> "$GITHUB_WORKSPACE/.github/instructions/pr-review.md"
+
       - id: action
         uses: .
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'sk-ant-test-key'
-          cerebras-api-key: 'csk-test-key'
-          gemini-api-key: 'AIza-test-key'
-          groq-api-key: 'gsk_test-key'
-          openrouter-api-key: 'sk-or-test-key'
-          zai-api-key: 'zai-test-key'
-          zenmux-api-key: 'zmx-test-key'
+          instructions-file: '.github/instructions/pr-review.md'
           dry-run: 'true'
           no-comment: 'true'
           skip-labeled: 'false'
@@ -52,4 +52,4 @@ jobs:
             echo "FAIL: cache-hit-ratio output is empty"
             exit 1
           fi
-          echo "PASS: all metrics outputs are present"
+          echo "PASS: all metrics outputs are present and instructions-file input was accepted"

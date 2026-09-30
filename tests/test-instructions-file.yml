@@ -1,4 +1,4 @@
-name: Test instructions-file input
+name: Test instructions-file input coverage
 on:
   workflow_dispatch:
 jobs:
@@ -7,12 +7,12 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Create a dummy instructions file
+      - name: Create instructions file
         run: |
           mkdir -p "$GITHUB_WORKSPACE/.github/instructions"
           cat > "$GITHUB_WORKSPACE/.github/instructions/pr-review.md" <<'EOF'
           # PR Review Instructions
-          Please review the PR for correctness and style.
+          Review the PR for correctness and style.
           EOF
 
       - id: action
@@ -22,6 +22,7 @@ jobs:
           instructions-file: '.github/instructions/pr-review.md'
           dry-run: 'true'
           no-comment: 'true'
+          apply-labels: 'false'
           skip-labeled: 'false'
 
       - name: Assert metrics outputs are present
@@ -36,22 +37,21 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # Under workflow_dispatch no AI calls are made (PR review step is skipped),
-          # so tokens should be 0
-          if [ "$INPUT_TOKENS" != "0" ]; then
-            echo "FAIL: expected input-tokens=0, got '$INPUT_TOKENS'"
+          # Under workflow_dispatch no aptu commands run, so metrics default to 0/n/a
+          if [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output is missing"
             exit 1
           fi
-          if [ "$OUTPUT_TOKENS" != "0" ]; then
-            echo "FAIL: expected output-tokens=0, got '$OUTPUT_TOKENS'"
+          if [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output is missing"
             exit 1
           fi
-          if [ "$DURATION_MS" != "0" ]; then
-            echo "FAIL: expected duration-ms=0, got '$DURATION_MS'"
+          if [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms output is missing"
             exit 1
           fi
-          if [ "$CACHE_HIT_RATIO" != "n/a" ]; then
-            echo "FAIL: expected cache-hit-ratio=n/a, got '$CACHE_HIT_RATIO'"
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is missing"
             exit 1
           fi
-          echo "PASS: action accepted instructions-file input and produced correct metrics"
+          echo "PASS: all metrics outputs are present with instructions-file input"

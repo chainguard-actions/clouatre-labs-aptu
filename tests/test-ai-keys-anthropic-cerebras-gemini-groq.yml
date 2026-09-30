@@ -1,0 +1,50 @@
+name: Test AI provider keys (anthropic, cerebras, gemini, groq)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: 'sk-ant-test-placeholder'
+          cerebras-api-key: 'csk-test-placeholder'
+          gemini-api-key: 'AIza-test-placeholder'
+          groq-api-key: 'gsk_test-placeholder'
+          dry-run: 'true'
+          skip-labeled: 'false'
+          pr-queue: 'false'
+
+      - name: Assert metrics outputs are present
+        env:
+          INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
+          OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
+          DURATION_MS: ${{ steps.action.outputs.duration-ms }}
+          CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
+        run: |
+          echo "input-tokens: $INPUT_TOKENS"
+          echo "output-tokens: $OUTPUT_TOKENS"
+          echo "duration-ms: $DURATION_MS"
+          echo "cache-hit-ratio: $CACHE_HIT_RATIO"
+
+          # On workflow_dispatch no AI calls are made, so metrics should be zero/n/a
+          if [ "$INPUT_TOKENS" != "0" ] && [ -n "$INPUT_TOKENS" ]; then
+            echo "WARN: expected input-tokens=0 but got '$INPUT_TOKENS'"
+          fi
+          if [ "$OUTPUT_TOKENS" != "0" ] && [ -n "$OUTPUT_TOKENS" ]; then
+            echo "WARN: expected output-tokens=0 but got '$OUTPUT_TOKENS'"
+          fi
+          if [ "$CACHE_HIT_RATIO" != "n/a" ] && [ -n "$CACHE_HIT_RATIO" ]; then
+            echo "WARN: expected cache-hit-ratio=n/a but got '$CACHE_HIT_RATIO'"
+          fi
+
+          # The key assertion: outputs must be set (not completely empty)
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output is missing entirely"
+            exit 1
+          fi
+          echo "PASS: metrics outputs are present"

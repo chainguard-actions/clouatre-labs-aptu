@@ -11,19 +11,20 @@ jobs:
         uses: .
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'sk-ant-test-placeholder'
-          cerebras-api-key: 'csk-test-placeholder'
-          gemini-api-key: 'AIza-test-placeholder'
-          groq-api-key: 'gsk_test-placeholder'
-          openrouter-api-key: 'sk-or-test-placeholder'
-          zai-api-key: 'zai-test-placeholder'
-          zenmux-api-key: 'zmx-test-placeholder'
+          anthropic-api-key: 'sk-ant-placeholder'
+          cerebras-api-key: 'csk-placeholder'
+          gemini-api-key: 'AIza-placeholder'
+          groq-api-key: 'gsk_placeholder'
+          openrouter-api-key: 'sk-or-placeholder'
+          zai-api-key: 'zai-placeholder'
+          zenmux-api-key: 'zmx-placeholder'
           instructions-file: '.github/instructions/pr-review.md'
           dry-run: 'true'
           no-comment: 'true'
+          skip-labeled: 'false'
           pr-queue: 'false'
 
-      - name: Assert metrics outputs are present
+      - name: Assert metrics outputs are set
         env:
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
           OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
@@ -35,18 +36,21 @@ jobs:
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
 
-          # Under workflow_dispatch no AI steps fire, so metrics should be zero/n/a
-          if [ "$INPUT_TOKENS" != "0" ] && [ -n "$INPUT_TOKENS" ]; then
-            echo "WARN: expected input-tokens=0 but got '$INPUT_TOKENS'"
+          # Under workflow_dispatch no AI steps fire, so tokens should be 0
+          if [ "$INPUT_TOKENS" != "0" ] && [ -z "$INPUT_TOKENS" ]; then
+            echo "FAIL: input-tokens output not set"
+            exit 1
           fi
-          if [ "$OUTPUT_TOKENS" != "0" ] && [ -n "$OUTPUT_TOKENS" ]; then
-            echo "WARN: expected output-tokens=0 but got '$OUTPUT_TOKENS'"
+          if [ "$OUTPUT_TOKENS" != "0" ] && [ -z "$OUTPUT_TOKENS" ]; then
+            echo "FAIL: output-tokens output not set"
+            exit 1
           fi
-          if [ "$DURATION_MS" != "0" ] && [ -n "$DURATION_MS" ]; then
-            echo "WARN: expected duration-ms=0 but got '$DURATION_MS'"
+          if [ "$DURATION_MS" != "0" ] && [ -z "$DURATION_MS" ]; then
+            echo "FAIL: duration-ms output not set"
+            exit 1
           fi
-          if [ "$CACHE_HIT_RATIO" != "n/a" ] && [ -n "$CACHE_HIT_RATIO" ]; then
-            echo "WARN: expected cache-hit-ratio=n/a but got '$CACHE_HIT_RATIO'"
+          if [ -z "$CACHE_HIT_RATIO" ]; then
+            echo "FAIL: cache-hit-ratio output not set"
+            exit 1
           fi
-
-          echo "PASS: all API key inputs accepted and metrics outputs are present"
+          echo "PASS: all metrics outputs are set"

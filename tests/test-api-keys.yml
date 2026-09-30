@@ -6,42 +6,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - id: action
         uses: .
+        continue-on-error: true
         with:
           github-token: ${{ github.token }}
-          anthropic-api-key: 'test-anthropic-key'
-          cerebras-api-key: 'test-cerebras-key'
-          gemini-api-key: 'test-gemini-key'
-          groq-api-key: 'test-groq-key'
-          openrouter-api-key: 'test-openrouter-key'
-          zai-api-key: 'test-zai-key'
-          zenmux-api-key: 'test-zenmux-key'
+          anthropic-api-key: 'sk-ant-test-placeholder'
+          cerebras-api-key: 'csk-test-placeholder'
+          gemini-api-key: 'AIza-test-placeholder'
+          groq-api-key: 'gsk_test-placeholder'
+          openrouter-api-key: 'sk-or-test-placeholder'
+          zai-api-key: 'zai-test-placeholder'
+          zenmux-api-key: 'zmx-test-placeholder'
           dry-run: 'true'
           no-comment: 'true'
-        continue-on-error: true
+          apply-labels: 'false'
 
-      - name: Assert action completed (metrics outputs present)
+      - name: Assert action ran and produced metrics outputs
         env:
+          OUTCOME: ${{ steps.action.outcome }}
           INPUT_TOKENS: ${{ steps.action.outputs.input-tokens }}
           OUTPUT_TOKENS: ${{ steps.action.outputs.output-tokens }}
           DURATION_MS: ${{ steps.action.outputs.duration-ms }}
           CACHE_HIT_RATIO: ${{ steps.action.outputs.cache-hit-ratio }}
-          OUTCOME: ${{ steps.action.outcome }}
         run: |
           echo "outcome: $OUTCOME"
           echo "input-tokens: $INPUT_TOKENS"
           echo "output-tokens: $OUTPUT_TOKENS"
           echo "duration-ms: $DURATION_MS"
           echo "cache-hit-ratio: $CACHE_HIT_RATIO"
-          if [ "$OUTCOME" != "success" ] && [ "$OUTCOME" != "failure" ]; then
+
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME)"
+          else
             echo "FAIL: unexpected outcome '$OUTCOME'"
             exit 1
           fi
-          # Under workflow_dispatch no AI steps fire, so metrics should be zero/n/a
-          # Just verify the outputs are set (not empty strings from missing step)
+
+          # The metrics-aggregate step always runs; cache-hit-ratio should always be set
           if [ -z "$CACHE_HIT_RATIO" ]; then
-            echo "FAIL: cache-hit-ratio output was not set"
+            echo "FAIL: cache-hit-ratio output is empty"
             exit 1
           fi
-          echo "PASS: action ran and produced metrics outputs"
+          echo "PASS: metrics outputs present"

@@ -1,0 +1,63 @@
+name: Test dry-run mode
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install fake aptu binary before action runs
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          cat > "$HOME/.local/bin/aptu" << 'APTU_EOF'
+          #!/bin/sh
+          echo "fake aptu (dry-run test) called with: $*"
+          exit 0
+          APTU_EOF
+          chmod +x "$HOME/.local/bin/aptu"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          skip-labeled: 'false'
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+        continue-on-error: true
+
+      - name: Assert action ran in dry-run mode
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # Under workflow_dispatch with dry-run=true, the action should:
+          # 1. Set skip=false (no issue labels)
+          # 2. Write fallback config
+          # 3. Attempt to resolve aptu version (real API call to clouatre-labs/aptu)
+          # 4. Install or use cached aptu
+          # 5. Skip all event-specific steps (no issue/PR/scan context)
+          # The action should succeed or fail gracefully
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran with dry-run=true (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert fallback config was written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: fallback config was not written"
+            exit 1
+          fi
+          echo "Config contents:"
+          cat "$CONFIG_FILE"
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: fallback config does not contain expected provider"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"

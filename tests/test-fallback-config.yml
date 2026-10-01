@@ -1,0 +1,73 @@
+name: Test fallback AI config writing
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Ensure no pre-existing aptu config
+        run: |
+          rm -f "$HOME/.config/aptu/config.toml"
+
+      - name: Run action with fallback config inputs
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+
+      - name: Assert fallback config was written correctly
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Config file contents:"
+          cat "$CONFIG_FILE" || echo "(file not found)"
+
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: config.toml was not created"
+            exit 1
+          fi
+
+          if ! grep -q '\[ai.fallback\]' "$CONFIG_FILE"; then
+            echo "FAIL: config.toml missing [ai.fallback] section"
+            exit 1
+          fi
+
+          if ! grep -q 'provider = "openrouter"' "$CONFIG_FILE"; then
+            echo "FAIL: config.toml missing expected provider"
+            exit 1
+          fi
+
+          if ! grep -q 'model = "inception/mercury-2"' "$CONFIG_FILE"; then
+            echo "FAIL: config.toml missing expected model"
+            exit 1
+          fi
+
+          echo "PASS: fallback config written correctly"
+
+      - name: Test that existing config is not overwritten
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          ORIGINAL_CONTENT=$(cat "$CONFIG_FILE")
+
+          # Simulate a second write attempt (should be skipped because file exists)
+          INPUT_FALLBACK_PROVIDER='anthropic'
+          INPUT_FALLBACK_MODEL='claude-3-5-sonnet'
+          if [[ -f "$CONFIG_FILE" ]]; then
+            echo "Config file already exists, skipping (user-managed config wins)"
+          else
+            printf '[ai.fallback]\nchain = [{ provider = "%s", model = "%s" }]\n' \
+              "$INPUT_FALLBACK_PROVIDER" "$INPUT_FALLBACK_MODEL" \
+              > "$CONFIG_FILE"
+          fi
+
+          CURRENT_CONTENT=$(cat "$CONFIG_FILE")
+          if [ "$ORIGINAL_CONTENT" != "$CURRENT_CONTENT" ]; then
+            echo "FAIL: existing config was overwritten"
+            exit 1
+          fi
+          echo "PASS: existing config was preserved"

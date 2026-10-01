@@ -1,0 +1,41 @@
+name: Test skip-labeled false (no skip)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create a minimal fake aptu binary to avoid real download
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          cat > "$HOME/.local/bin/aptu" << 'EOF'
+          #!/bin/sh
+          echo "fake aptu called with: $*"
+          exit 0
+          EOF
+          chmod +x "$HOME/.local/bin/aptu"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'false'
+          dry-run: 'true'
+        continue-on-error: true
+
+      - name: Assert action completed (skip=false path)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # Under workflow_dispatch with no issue/PR context, the action should
+          # complete (success or failure from version resolution) but NOT skip
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

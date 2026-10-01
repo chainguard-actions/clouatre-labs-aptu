@@ -1,0 +1,11 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["local>clouatre-labs/.github//default"],
+  "ignorePaths": ["fuzz/**"],
+  "packageRules": [
+    {
+      "matchPackageNames": ["reqwest"],
+      "allowedVersions": ">=0.12.0 <0.13.0"
+    }
+  ]
+}

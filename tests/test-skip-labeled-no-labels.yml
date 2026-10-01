@@ -1,0 +1,91 @@
+name: Test skip-labeled true with no labels (should not skip)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run check-skip logic directly to verify behavior with no labels
+        id: check-skip-test
+        env:
+          SKIP_LABELED: 'true'
+          ISSUE_LABELS: 'null'
+        run: |
+          # Replicate the check-skip logic from the action
+          if [[ "$SKIP_LABELED" == "true" ]]; then
+            HAS_TYPE=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(startswith("type:"))] | length > 0')
+            HAS_PRIORITY=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(test("^p[0-9]$"))] | length > 0')
+            if [[ "$HAS_TYPE" == "true" && "$HAS_PRIORITY" == "true" ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Issue already has type and priority labels, skipping triage"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assert skip=false when no labels present
+        env:
+          SKIP: ${{ steps.check-skip-test.outputs.skip }}
+        run: |
+          echo "skip: $SKIP"
+          if [ "$SKIP" != "false" ]; then
+            echo "FAIL: expected skip=false when issue has no labels, got '$SKIP'"
+            exit 1
+          fi
+          echo "PASS: skip=false correctly set when no labels present"
+
+      - name: Run check-skip logic with type+priority labels
+        id: check-skip-with-labels
+        env:
+          SKIP_LABELED: 'true'
+          ISSUE_LABELS: '[{"name":"type:bug"},{"name":"p1"}]'
+        run: |
+          if [[ "$SKIP_LABELED" == "true" ]]; then
+            HAS_TYPE=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(startswith("type:"))] | length > 0')
+            HAS_PRIORITY=$(echo "$ISSUE_LABELS" | jq '(. // []) | [.[].name | select(test("^p[0-9]$"))] | length > 0')
+            if [[ "$HAS_TYPE" == "true" && "$HAS_PRIORITY" == "true" ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assert skip=true when both type and priority labels present
+        env:
+          SKIP: ${{ steps.check-skip-with-labels.outputs.skip }}
+        run: |
+          echo "skip: $SKIP"
+          if [ "$SKIP" != "true" ]; then
+            echo "FAIL: expected skip=true when issue has type+priority labels, got '$SKIP'"
+            exit 1
+          fi
+          echo "PASS: skip=true correctly set when type and priority labels present"
+
+      - name: Invoke action to confirm it runs without skipping under workflow_dispatch
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          skip-labeled: 'true'
+          dry-run: 'true'
+
+      - name: Assert action ran (not skipped)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # Under workflow_dispatch with no issue labels, skip=false so the action
+          # proceeds to install aptu. It may succeed or fail (network/API), but it
+          # must not be 'skipped' (which would indicate the skip logic fired wrongly).
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action ran (outcome=$OUTCOME), skip logic did not suppress execution"

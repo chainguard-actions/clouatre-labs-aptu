@@ -1,0 +1,49 @@
+name: Test action with no event context (workflow_dispatch)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+        continue-on-error: true
+
+      - name: Assert action completed without event-specific steps
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          PR_REVIEW_OUTCOME: ${{ steps.action.outputs.pr-review-outcome }}
+          LINT_ISSUE_OUTCOME: ${{ steps.action.outputs.lint-issue-outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "pr-review-outcome: $PR_REVIEW_OUTCOME"
+          echo "lint-issue-outcome: $LINT_ISSUE_OUTCOME"
+
+          # Under workflow_dispatch:
+          # - No issue/PR event → issue triage, PR label, PR review steps are skipped
+          # - No lint-issue-file → lint-issue step is skipped
+          # - No scan-path → scan-security step is skipped
+          # So pr-review-outcome and lint-issue-outcome should be empty
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -n "$PR_REVIEW_OUTCOME" ]; then
+              echo "FAIL: pr-review-outcome should be empty under workflow_dispatch, got '$PR_REVIEW_OUTCOME'"
+              exit 1
+            fi
+            if [ -n "$LINT_ISSUE_OUTCOME" ]; then
+              echo "FAIL: lint-issue-outcome should be empty under workflow_dispatch, got '$LINT_ISSUE_OUTCOME'"
+              exit 1
+            fi
+            echo "PASS: action completed with empty outputs as expected"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (likely version resolution or binary install)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

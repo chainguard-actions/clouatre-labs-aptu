@@ -610,7 +610,7 @@ runs:
     - name: Upload SARIF report
       if: always() && inputs.sarif-upload == 'true' && hashFiles('findings.sarif') != ''
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+      uses: chainguard-actions/github-codeql-action/upload-sarif@c2231fe3a4ba32b93cf2e94e786f822d890d9b28 # v4.37.7
       with:
         sarif_file: findings.sarif
         category: aptu-scan-security

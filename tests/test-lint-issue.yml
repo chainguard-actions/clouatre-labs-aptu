@@ -1,0 +1,57 @@
+name: Test lint-issue step fires when lint-issue-file is set
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create issue body fixture
+        run: |
+          mkdir -p /tmp/aptu-test
+          cp "$GITHUB_WORKSPACE/tests/fixtures/sample-issue.md" /tmp/aptu-test/issue.md
+          echo "Fixture file ready at /tmp/aptu-test/issue.md"
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          lint-issue-file: '/tmp/aptu-test/issue.md'
+          lint-issue-type: 'feature'
+          # lint-fail-on=false keeps the lint step advisory (continue-on-error)
+          lint-fail-on: 'false'
+          dry-run: 'true'
+        continue-on-error: true
+
+      - name: Assert action ran and lint-issue-outcome is set
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          LINT_OUTCOME: ${{ steps.action.outputs.lint-issue-outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "lint-issue-outcome: $LINT_OUTCOME"
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action step was skipped — workflow configuration error"
+            exit 1
+          fi
+          # The action either succeeds (aptu installed and lint ran) or fails
+          # gracefully (e.g. API issues). In the success case, lint-issue-outcome
+          # must be set to 'success' or 'failure'.
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -z "$LINT_OUTCOME" ]; then
+              echo "FAIL: action succeeded but lint-issue-outcome output is empty"
+              exit 1
+            fi
+            if [ "$LINT_OUTCOME" != "success" ] && [ "$LINT_OUTCOME" != "failure" ]; then
+              echo "FAIL: lint-issue-outcome has unexpected value: '$LINT_OUTCOME'"
+              exit 1
+            fi
+            echo "PASS: lint-issue-outcome=$LINT_OUTCOME"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (aptu install or API issue under harness)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

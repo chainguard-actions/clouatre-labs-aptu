@@ -1,0 +1,35 @@
+name: Test pr-review-outcome is empty when no PR event
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+        continue-on-error: true
+
+      - name: Assert pr-review-outcome is empty (no PR event)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          PR_REVIEW_OUTCOME: ${{ steps.action.outputs.pr-review-outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "pr-review-outcome: '$PR_REVIEW_OUTCOME'"
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action step was skipped — workflow configuration error"
+            exit 1
+          fi
+          # Under workflow_dispatch, the PR review step is gated on pull_request /
+          # repository_dispatch events and should NOT fire. The output must be empty.
+          if [ -n "$PR_REVIEW_OUTCOME" ]; then
+            echo "FAIL: expected pr-review-outcome to be empty under workflow_dispatch, got '$PR_REVIEW_OUTCOME'"
+            exit 1
+          fi
+          echo "PASS: pr-review-outcome is empty as expected (no PR event)"

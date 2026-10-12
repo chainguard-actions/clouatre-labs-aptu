@@ -1,0 +1,40 @@
+name: Test fallback AI config is written when fallback inputs are set
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: 'openrouter'
+          fallback-model: 'inception/mercury-2'
+          dry-run: 'true'
+        continue-on-error: true
+
+      - name: Assert fallback config was written
+        run: |
+          CONFIG_FILE="$HOME/.config/aptu/config.toml"
+          echo "Checking for config file at: $CONFIG_FILE"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "FAIL: config.toml was not created at $CONFIG_FILE"
+            exit 1
+          fi
+          echo "Config file contents:"
+          cat "$CONFIG_FILE"
+          # Verify it contains the expected fallback provider
+          if ! grep -q 'openrouter' "$CONFIG_FILE"; then
+            echo "FAIL: config.toml does not contain 'openrouter'"
+            exit 1
+          fi
+          # Verify it contains the expected fallback model
+          if ! grep -q 'inception/mercury-2' "$CONFIG_FILE"; then
+            echo "FAIL: config.toml does not contain 'inception/mercury-2'"
+            exit 1
+          fi
+          echo "PASS: fallback config written correctly"

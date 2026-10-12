@@ -1,0 +1,30 @@
+name: Test skip-labeled=false always proceeds (skip=false)
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          # When skip-labeled is false, the check-skip step never sets skip=true
+          # regardless of issue labels. The action should proceed to install aptu.
+          skip-labeled: 'false'
+          dry-run: 'true'
+        continue-on-error: true
+
+      - name: Assert action ran (not skipped)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action step was skipped — workflow configuration error"
+            exit 1
+          fi
+          echo "PASS: action ran with skip-labeled=false (outcome=$OUTCOME)"

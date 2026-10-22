@@ -1,0 +1,67 @@
+name: Test provider API keys and instructions-file inputs (workflow_dispatch)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Ensure a recent gh CLI (with attestation support) is available
+        run: |
+          if command -v gh >/dev/null 2>&1 && gh attestation --help >/dev/null 2>&1; then
+            gh --version
+            exit 0
+          fi
+          case "$(uname -m)" in
+            x86_64) A=amd64 ;;
+            aarch64|arm64) A=arm64 ;;
+            *) echo "unsupported arch"; exit 1 ;;
+          esac
+          V=2.65.0
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${V}/gh_${V}_linux_${A}.tar.gz" -o /tmp/gh.tgz
+          tar -xzf /tmp/gh.tgz -C /tmp
+          mkdir -p "$HOME/gh-cli"
+          cp "/tmp/gh_${V}_linux_${A}/bin/gh" "$HOME/gh-cli/gh"
+          echo "$HOME/gh-cli" >> "$GITHUB_PATH"
+          "$HOME/gh-cli/gh" --version
+      - name: Clean any existing aptu config
+        run: rm -rf "$HOME/.config/aptu"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: dummy-anthropic-key
+          gemini-api-key: dummy-gemini-key
+          openrouter-api-key: dummy-openrouter-key
+          zai-api-key: dummy-zai-key
+          provider: anthropic
+          instructions-file: AGENTS.md
+      - name: Assert fallback config written with defaults
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          if [ ! -f "$CFG" ]; then
+            echo "FAIL: $CFG not found"
+            exit 1
+          fi
+          cat "$CFG"
+          grep -qF 'provider = "openrouter"' "$CFG" || { echo "FAIL: missing default fallback provider"; exit 1; }
+          grep -qF 'model = "inception/mercury-2"' "$CFG" || { echo "FAIL: missing default fallback model"; exit 1; }
+          echo "PASS"
+      - name: Assert aptu binary installed and on PATH
+        run: |
+          if [ ! -x "$HOME/.local/bin/aptu" ]; then
+            echo "FAIL: aptu binary not installed"
+            exit 1
+          fi
+          command -v aptu >/dev/null 2>&1 || { echo "FAIL: aptu not on PATH"; exit 1; }
+          echo "PASS"
+      - name: Assert PR review did not run under workflow_dispatch
+        env:
+          ACTUAL: ${{ steps.action.outputs.pr-review-outcome }}
+        run: |
+          echo "pr-review-outcome: '$ACTUAL'"
+          if [ -n "$ACTUAL" ]; then
+            echo "FAIL: expected empty pr-review-outcome"
+            exit 1
+          fi
+          echo "PASS"

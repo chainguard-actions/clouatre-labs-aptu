@@ -1,0 +1,42 @@
+name: Test fallback disabled (empty provider and model)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Ensure a recent gh CLI (with attestation support) is available
+        run: |
+          if command -v gh >/dev/null 2>&1 && gh attestation --help >/dev/null 2>&1; then
+            gh --version
+            exit 0
+          fi
+          case "$(uname -m)" in
+            x86_64) A=amd64 ;;
+            aarch64|arm64) A=arm64 ;;
+            *) echo "unsupported arch"; exit 1 ;;
+          esac
+          V=2.65.0
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${V}/gh_${V}_linux_${A}.tar.gz" -o /tmp/gh.tgz
+          tar -xzf /tmp/gh.tgz -C /tmp
+          mkdir -p "$HOME/gh-cli"
+          cp "/tmp/gh_${V}_linux_${A}/bin/gh" "$HOME/gh-cli/gh"
+          echo "$HOME/gh-cli" >> "$GITHUB_PATH"
+      - name: Clean any existing aptu config
+        run: rm -rf "$HOME/.config/aptu"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: ''
+          fallback-model: ''
+      - name: Assert no fallback config was written
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          if [ -f "$CFG" ]; then
+            echo "FAIL: config should not exist when fallback is disabled"
+            cat "$CFG"
+            exit 1
+          fi
+          echo "PASS"

@@ -1,0 +1,49 @@
+name: Test custom fallback provider and model
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Ensure a recent gh CLI (with attestation support) is available
+        run: |
+          if command -v gh >/dev/null 2>&1 && gh attestation --help >/dev/null 2>&1; then
+            gh --version
+            exit 0
+          fi
+          case "$(uname -m)" in
+            x86_64) A=amd64 ;;
+            aarch64|arm64) A=arm64 ;;
+            *) echo "unsupported arch"; exit 1 ;;
+          esac
+          V=2.65.0
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${V}/gh_${V}_linux_${A}.tar.gz" -o /tmp/gh.tgz
+          tar -xzf /tmp/gh.tgz -C /tmp
+          mkdir -p "$HOME/gh-cli"
+          cp "/tmp/gh_${V}_linux_${A}/bin/gh" "$HOME/gh-cli/gh"
+          echo "$HOME/gh-cli" >> "$GITHUB_PATH"
+      - name: Clean any existing aptu config
+        run: rm -rf "$HOME/.config/aptu"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: gemini
+          fallback-model: gemini-3.1-flash-lite
+      - name: Assert custom fallback config was written
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          if [ ! -f "$CFG" ]; then
+            echo "FAIL: $CFG not found"
+            exit 1
+          fi
+          cat "$CFG"
+          EXPECTED='chain = [{ provider = "gemini", model = "gemini-3.1-flash-lite" }]'
+          grep -qF '[ai.fallback]' "$CFG" || { echo "FAIL: missing [ai.fallback]"; exit 1; }
+          grep -qF "$EXPECTED" "$CFG" || { echo "FAIL: expected line: $EXPECTED"; exit 1; }
+          if grep -qF 'openrouter' "$CFG"; then
+            echo "FAIL: default provider should have been overridden"
+            exit 1
+          fi
+          echo "PASS"

@@ -264,7 +264,7 @@ runs:
     - name: Cache aptu binary
       id: cache-aptu
       if: steps.check-skip.outputs.skip != 'true'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      uses: chainguard-actions/actions-cache@244dfed44d8c4e917b332280fb2c1063eda3d9be # v6
       with:
         path: ~/.local/bin/aptu
         key: aptu-${{ steps.resolve-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -528,7 +528,7 @@ runs:
     - name: Upload SARIF report
       if: always() && inputs.sarif-upload == 'true' && hashFiles('findings.sarif') != ''
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      uses: chainguard-actions/github-codeql-action/upload-sarif@af9a71138d91d5fb30bfcfc73aff470163092543 # v4.39.0
       with:
         sarif_file: findings.sarif
         category: aptu-scan-security
@@ -568,7 +568,7 @@ runs:
 
     - name: Upload token usage artifact
       if: always()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      uses: chainguard-actions/actions-upload-artifact@ebf8f2543b7189e9a67dcac1af8cabbc5d7a3fd6 # v7.0.2
       with:
         name: aptu-token-usage-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-token-usage.jsonl
@@ -577,7 +577,7 @@ runs:
 
     - name: Upload review context artifact
       if: always()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      uses: chainguard-actions/actions-upload-artifact@ebf8f2543b7189e9a67dcac1af8cabbc5d7a3fd6 # v7.0.2
       with:
         name: aptu-review-context-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-review-context.jsonl

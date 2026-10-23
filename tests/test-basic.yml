@@ -1,0 +1,65 @@
+name: Test basic install (workflow_dispatch, no event-driven steps)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install GitHub CLI (not present in act image)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          case "$(uname -m)" in
+            aarch64|arm64) GH_ARCH=arm64 ;;
+            *) GH_ARCH=amd64 ;;
+          esac
+          GH_VER=2.63.2
+          TMP=$(mktemp -d)
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_${GH_ARCH}.tar.gz" -o "$TMP/gh.tar.gz"
+          tar -xzf "$TMP/gh.tar.gz" -C "$TMP"
+          mkdir -p "$HOME/.gh-cli/bin"
+          install -m 0755 "$TMP/gh_${GH_VER}_linux_${GH_ARCH}/bin/gh" "$HOME/.gh-cli/bin/gh"
+          echo "$HOME/.gh-cli/bin" >> "$GITHUB_PATH"
+          "$HOME/.gh-cli/bin/gh" --version
+      - name: Ensure no pre-existing aptu config
+        run: rm -f "$HOME/.config/aptu/config.toml"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+      - name: Assert aptu binary installed and on PATH
+        run: |
+          ls -l "$HOME/.local/bin/aptu" || true
+          if [ ! -x "$HOME/.local/bin/aptu" ]; then
+            echo "FAIL: aptu binary not installed at ~/.local/bin/aptu"
+            exit 1
+          fi
+          if ! command -v aptu >/dev/null 2>&1; then
+            echo "FAIL: aptu not on PATH"
+            exit 1
+          fi
+          aptu --version || true
+          echo "PASS"
+      - name: Assert default fallback config written
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          cat "$CFG" || true
+          if [ ! -f "$CFG" ]; then
+            echo "FAIL: config.toml not written"
+            exit 1
+          fi
+          grep -q '\[ai.fallback\]' "$CFG" || { echo "FAIL: missing [ai.fallback]"; exit 1; }
+          grep -q 'provider = "openrouter"' "$CFG" || { echo "FAIL: default provider missing"; exit 1; }
+          grep -q 'model = "inception/mercury-2"' "$CFG" || { echo "FAIL: default model missing"; exit 1; }
+          echo "PASS"
+      - name: Assert PR review did not run (not a pull_request event)
+        env:
+          ACTUAL: ${{ steps.action.outputs.pr-review-outcome }}
+        run: |
+          echo "actual: '$ACTUAL'"
+          if [ -n "$ACTUAL" ]; then
+            echo "FAIL: expected empty pr-review-outcome"
+            exit 1
+          fi
+          echo "PASS"

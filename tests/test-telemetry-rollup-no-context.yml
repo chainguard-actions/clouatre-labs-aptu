@@ -1,0 +1,42 @@
+name: Test telemetry rollup with no review context
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install GitHub CLI (not present in act image)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          case "$(uname -m)" in
+            aarch64|arm64) GH_ARCH=arm64 ;;
+            *) GH_ARCH=amd64 ;;
+          esac
+          GH_VER=2.63.2
+          TMP=$(mktemp -d)
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_${GH_ARCH}.tar.gz" -o "$TMP/gh.tar.gz"
+          tar -xzf "$TMP/gh.tar.gz" -C "$TMP"
+          mkdir -p "$HOME/.gh-cli/bin"
+          install -m 0755 "$TMP/gh_${GH_VER}_linux_${GH_ARCH}/bin/gh" "$HOME/.gh-cli/bin/gh"
+          echo "$HOME/.gh-cli/bin" >> "$GITHUB_PATH"
+          "$HOME/.gh-cli/bin/gh" --version
+      - name: Ensure no review context file
+        run: |
+          rm -f "$RUNNER_TEMP/aptu-review-context.jsonl"
+          rm -rf "$GITHUB_WORKSPACE/.aptu-test-rollup"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          telemetry-rollup: 'true'
+          telemetry-rollup-path: .aptu-test-rollup/rollup.jsonl
+      - name: Assert no rollup written without a context file
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/.aptu-test-rollup/rollup.jsonl" ]; then
+            cat "$GITHUB_WORKSPACE/.aptu-test-rollup/rollup.jsonl"
+            echo "FAIL: rollup should not be written when there is no review context"
+            exit 1
+          fi
+          echo "PASS"

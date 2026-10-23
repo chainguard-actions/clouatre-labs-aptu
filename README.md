@@ -39,6 +39,7 @@ Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at
 | v0.12.6 | [`v0.12.6`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.12.6) | [`5ac5e68`](https://github.com/clouatre-labs/aptu/commit/5ac5e6880db1ef2e6d5686353a0db23602a3497e) |
 | v0.13.0 | [`v0.13.0`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.13.0) | [`2c27398`](https://github.com/clouatre-labs/aptu/commit/2c2739851bee95bfe7a194a849dcab766beb3f54) |
 | v0.14.0 | [`v0.14.0`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.14.0) | [`8296472`](https://github.com/clouatre-labs/aptu/commit/829647276735d9569b1be1350bd13bd56568a2d9) |
+| v0.14.1 | [`v0.14.1`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.14.1) | [`36a6b62`](https://github.com/clouatre-labs/aptu/commit/36a6b62fc6c3d4faa839cc668d6720606c3b60b1) |
 | v0.8.3 | [`v0.8.3`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.3) | [`26faf66`](https://github.com/clouatre-labs/aptu/commit/26faf669f25e754e4dd4488f77d31a81d2998c60) |
 | v0.8.4 | [`v0.8.4`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.4) | [`b505a0c`](https://github.com/clouatre-labs/aptu/commit/b505a0c3144c113c77f1607025c0cc7f60c654d6) |
 | v0.8.5 | [`v0.8.5`](https://github.com/chainguard-actions/clouatre-labs-aptu/tree/v0.8.5) | [`73b96b7`](https://github.com/clouatre-labs/aptu/commit/73b96b78cf358cd085c26fac86613a450168d3b6) |

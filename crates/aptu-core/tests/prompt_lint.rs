@@ -1,0 +1,350 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Prompt quality invariant tests.
+//!
+//! Loads every embedded prompt fragment and asserts structural and size invariants
+//! using the same builder functions that `provider.rs` uses at runtime. Tests
+//! therefore validate the exact strings the AI receives, not a copy.
+
+use aptu_core::ai::prompts::{
+    TOOLING_CONTEXT, build_pr_review_system_prompt, build_triage_system_prompt,
+};
+use aptu_core::ai::provider::AiProvider;
+use aptu_core::ai::types::{IssueDetails, PrDetails, PrFile};
+
+// ---------------------------------------------------------------------------
+// Minimal provider stub for user-prompt builder access
+// ---------------------------------------------------------------------------
+
+struct StubProvider;
+
+static STUB_PROVIDER_CONFIG: aptu_core::ai::registry::ProviderConfig =
+    aptu_core::ai::registry::ProviderConfig {
+        name: "stub",
+        display_name: "Stub",
+        api_url: "https://stub.example.com",
+        api_key_env: "STUB_API_KEY",
+        model: "stub-model",
+        max_tokens: 2048,
+        temperature: 0.3,
+    };
+
+impl AiProvider for StubProvider {
+    fn config(&self) -> &aptu_core::ai::registry::ProviderConfig {
+        &STUB_PROVIDER_CONFIG
+    }
+    fn http_client(&self) -> &reqwest::Client {
+        unimplemented!()
+    }
+    fn api_key(&self) -> &secrecy::SecretString {
+        unimplemented!()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Returns all system prompts as `(name, content)` pairs built the same way
+/// `provider.rs` does at runtime. Tests iterate this list once rather than
+/// repeating assertions per prompt.
+fn all_system_prompts() -> Vec<(&'static str, String)> {
+    vec![
+        ("triage", build_triage_system_prompt(TOOLING_CONTEXT)),
+        ("pr_review", build_pr_review_system_prompt(TOOLING_CONTEXT)),
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_embedded_prompts_non_empty() {
+    for (name, prompt) in all_system_prompts() {
+        assert!(!prompt.is_empty(), "prompt '{name}' is empty");
+    }
+    assert!(!TOOLING_CONTEXT.is_empty(), "tooling_context.md is empty");
+}
+
+#[test]
+fn all_embedded_prompts_within_max_size() {
+    // Ceiling empirically grounded: Goldberg et al. (arXiv:2402.14848) show reasoning
+    // degradation around 3,000 tokens; 5,500 chars (~1,375 tokens at ~4 chars/token)
+    // provides headroom below that threshold. Raised from 5,000 to accommodate the JSON
+    // schema now embedded directly in each system prompt (examples were removed, not
+    // relocated, so this is not an examples-plus-schema budget).
+    const MAX: usize = 5500;
+    for (name, prompt) in all_system_prompts() {
+        assert!(
+            prompt.len() <= MAX,
+            "prompt '{name}' exceeds {MAX} chars: {} chars",
+            prompt.len()
+        );
+    }
+}
+
+#[test]
+fn system_prompts_have_persona_directive() {
+    for (name, prompt) in all_system_prompts() {
+        assert!(
+            prompt.contains("You are a"),
+            "prompt '{name}' missing persona directive"
+        );
+    }
+}
+
+#[test]
+fn system_prompts_do_not_have_examples_section() {
+    for (name, prompt) in all_system_prompts() {
+        assert!(
+            !prompt.contains("## Examples"),
+            "prompt '{name}' still contains ## Examples section (moved to user turn)"
+        );
+    }
+}
+
+#[test]
+fn system_prompts_have_json_reminder_bookend() {
+    // Window widened from 300 to 700 chars: the JSON schema is now appended after
+    // guidelines (schema-in-system-prompt migration), and the largest schema (triage,
+    // ~611 chars) plus the preamble no longer fits in a 300-char tail.
+    const TAIL_WINDOW: usize = 700;
+    for (name, prompt) in all_system_prompts() {
+        let tail = &prompt[prompt.len().saturating_sub(TAIL_WINDOW)..];
+        assert!(
+            tail.contains("valid JSON") || tail.contains("schema"),
+            "prompt '{name}' missing JSON reminder in last {TAIL_WINDOW} chars"
+        );
+    }
+}
+
+#[test]
+fn system_prompts_meet_minimum_size() {
+    const MIN: usize = 200;
+    for (name, prompt) in all_system_prompts() {
+        assert!(
+            prompt.len() >= MIN,
+            "prompt '{name}' is too short: {} chars (min {MIN})",
+            prompt.len()
+        );
+    }
+}
+
+#[test]
+fn tooling_context_contains_required_tools() {
+    assert!(
+        TOOLING_CONTEXT.contains("ruff"),
+        "tooling_context missing 'ruff'"
+    );
+    assert!(
+        TOOLING_CONTEXT.contains("biome"),
+        "tooling_context missing 'biome'"
+    );
+}
+
+#[test]
+fn all_system_prompts_contain_schema() {
+    // triage system prompt
+    let triage_system = build_triage_system_prompt(TOOLING_CONTEXT);
+    assert!(
+        triage_system.contains("summary") && triage_system.contains("suggested_labels"),
+        "triage system prompt missing schema fields"
+    );
+
+    // pr_review system prompt
+    let pr_review_system = build_pr_review_system_prompt(TOOLING_CONTEXT);
+    assert!(
+        pr_review_system.contains("verdict") && pr_review_system.contains("summary"),
+        "pr_review system prompt missing schema fields"
+    );
+
+    // user prompts must NOT contain schema fields anymore
+    let issue = IssueDetails::builder()
+        .owner("test".to_string())
+        .repo("repo".to_string())
+        .number(1)
+        .title("Test issue".to_string())
+        .body("Issue body".to_string())
+        .labels(vec![])
+        .comments(vec![])
+        .url("https://github.com/test/repo/issues/1".to_string())
+        .build();
+    let triage_user = aptu_core::ai::prompts::build_user_prompt(&issue);
+    assert!(
+        !triage_user.contains("suggested_labels"),
+        "triage user prompt must not contain schema fields"
+    );
+
+    let pr = PrDetails {
+        owner: "test".to_string(),
+        repo: "repo".to_string(),
+        number: 1,
+        title: "Test PR".to_string(),
+        body: "PR body".to_string(),
+        head_branch: "feat".to_string(),
+        base_branch: "main".to_string(),
+        url: "https://github.com/test/repo/pull/1".to_string(),
+        files: vec![PrFile {
+            filename: "src/lib.rs".to_string(),
+            status: "modified".to_string(),
+            additions: 5,
+            deletions: 2,
+            patch: None,
+            full_content: None,
+            patch_truncated: false,
+        }],
+        labels: vec![],
+        head_sha: String::new(),
+        review_comments: vec![],
+        instructions: None,
+        prior_findings: None,
+    };
+    let mut ctx = aptu_core::ai::review_context::ReviewContext {
+        pr,
+        max_chars_per_file: 32_000,
+        max_diff_chars: 200_000,
+        max_patch_chars_per_file: 10_000,
+        files_truncated: 0,
+        truncated_chars_dropped: 0,
+        truncated_patch_files: Vec::new(),
+        files_total: 0,
+        files_with_patch: 0,
+        budget_drops: Vec::new(),
+        prompt_chars_final: 0,
+        estimated_size: 0,
+        context_window: None,
+        prior_findings: None,
+    };
+    let pr_review_user = aptu_core::ai::prompts::build_pr_review_user_prompt(&mut ctx);
+    assert!(
+        !pr_review_user.contains("verdict"),
+        "pr_review user prompt must not contain schema fields"
+    );
+}
+
+#[cfg(test)]
+mod fetch_file_contents_tests {
+    use super::*;
+
+    /// Minimal `PrDetails` for a single `src/lib.rs` file with a patch and optional full content.
+    fn make_pr(full_content: Option<&str>) -> PrDetails {
+        PrDetails {
+            owner: "test".to_string(),
+            repo: "repo".to_string(),
+            number: 1,
+            title: "Test PR".to_string(),
+            body: "PR body".to_string(),
+            head_branch: "feat".to_string(),
+            base_branch: "main".to_string(),
+            url: "https://github.com/test/repo/pull/1".to_string(),
+            files: vec![PrFile {
+                filename: "src/lib.rs".to_string(),
+                status: "modified".to_string(),
+                additions: 5,
+                deletions: 2,
+                patch: Some("@@ -1,3 +1,4 @@\n+// new line".to_string()),
+                full_content: full_content.map(str::to_string),
+                patch_truncated: false,
+            }],
+            labels: vec![],
+            head_sha: String::new(),
+            review_comments: vec![],
+            instructions: None,
+            prior_findings: None,
+        }
+    }
+
+    /// `ReviewContext` wrapping `pr` with all other fields at their defaults.
+    fn make_ctx(pr: PrDetails) -> aptu_core::ai::review_context::ReviewContext {
+        aptu_core::ai::review_context::ReviewContext {
+            pr,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_file_content_injected_into_prompt() {
+        let mut ctx = make_ctx(make_pr(Some("fn hello() {}")));
+        let prompt = StubProvider::build_pr_review_user_prompt(&mut ctx);
+        assert!(
+            prompt.contains("<file_content path=\"src/lib.rs\">"),
+            "Prompt should contain file_content block"
+        );
+        assert!(
+            prompt.contains("fn hello() {}"),
+            "Prompt should contain full file content"
+        );
+    }
+
+    #[test]
+    fn test_file_content_truncated_at_prompt_assembly() {
+        // Arrange: full_content longer than the configured cap (4000 chars for this test)
+        const CAP: usize = 4_000;
+        let long_content = "x".repeat(CAP + 1000);
+        assert!(long_content.len() > CAP);
+        let pr = PrDetails {
+            files: vec![PrFile {
+                filename: "huge.rs".to_string(),
+                status: "modified".to_string(),
+                additions: 100,
+                deletions: 0,
+                patch: Some("@@ -1,1 +1,1 @@\n+x".to_string()),
+                full_content: Some(long_content.clone()),
+                patch_truncated: false,
+            }],
+            ..make_pr(None)
+        };
+
+        // Act: use explicit cap of 4000 to validate truncation at a specific boundary
+        let mut ctx = aptu_core::ai::review_context::ReviewContext {
+            max_chars_per_file: CAP,
+            ..make_ctx(pr)
+        };
+        let prompt = StubProvider::build_pr_review_user_prompt(&mut ctx);
+
+        // Assert: block present but content capped at CAP
+        assert!(
+            prompt.contains("<file_content path=\"huge.rs\">"),
+            "Prompt should contain file_content block"
+        );
+        let block_start = prompt
+            .find("<file_content path=\"huge.rs\">\n")
+            .expect("file_content block start");
+        let content_start = block_start + "<file_content path=\"huge.rs\">\n".len();
+        let block_end = prompt[content_start..]
+            .find("\n</file_content>")
+            .expect("file_content block end");
+        let block_body = &prompt[content_start..content_start + block_end];
+        // The block body contains the truncated content followed by the annotation line
+        let lines: Vec<&str> = block_body.split('\n').collect();
+        assert!(
+            lines.len() >= 2,
+            "block body should have at least a content line and annotation line"
+        );
+        let content_line = lines[0];
+        assert!(
+            content_line.len() <= CAP,
+            "file_content body first line must be capped at max_chars_per_file"
+        );
+        assert!(
+            block_body.contains("truncated by size budget"),
+            "truncation annotation must be inside file_content block"
+        );
+    }
+
+    #[test]
+    fn test_review_context_prompt_unchanged_without_enrichment() {
+        let mut ctx = make_ctx(make_pr(None));
+
+        // Act: call build_pr_review_user_prompt with minimal ReviewContext
+        let prompt = StubProvider::build_pr_review_user_prompt(&mut ctx);
+
+        // Assert: prompt contains PR title but NOT enrichment sections
+        assert!(prompt.contains("Test PR"), "prompt should contain PR title");
+        assert!(
+            !prompt.contains("<dependency_release_notes>"),
+            "prompt should NOT contain dependency_release_notes section when empty"
+        );
+    }
+}

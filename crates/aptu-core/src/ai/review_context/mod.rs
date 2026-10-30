@@ -1,0 +1,819 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Review context policy layer for PR analysis.
+//!
+//! Centralizes all enrichment decisions (dependency enrichments)
+//! into a single `ReviewContext` struct and `build_review_context()` function.
+
+use crate::ai::types::PrDetails;
+
+/// Review context containing all enrichment data and configuration for PR analysis.
+///
+/// This struct centralizes enrichment decisions and is passed to `build_pr_review_user_prompt()`
+/// to avoid scattered conditional logic throughout the codebase.
+#[derive(Clone, Debug)]
+pub struct ReviewContext {
+    /// Pull request details.
+    pub pr: PrDetails,
+    /// Maximum characters per file's full content in the prompt (from `ReviewConfig`).
+    pub max_chars_per_file: usize,
+    /// Maximum total diff characters across all files in the prompt (from `ReviewConfig`).
+    pub max_diff_chars: usize,
+    /// Maximum characters per individual file patch before the patch is dropped entirely (from `ReviewConfig`).
+    pub max_patch_chars_per_file: usize,
+    /// Number of files whose full content was truncated at prompt assembly.
+    pub files_truncated: usize,
+    /// Total characters dropped across all truncated files.
+    pub truncated_chars_dropped: usize,
+    /// Names of files whose patches were truncated or skipped at prompt assembly.
+    pub truncated_patch_files: Vec<String>,
+    /// Total number of files in the PR.
+    pub files_total: usize,
+    /// Number of files with a patch (non-empty diff).
+    pub files_with_patch: usize,
+    /// Names of context items dropped due to budget constraints.
+    pub budget_drops: Vec<String>,
+    /// Final assembled prompt character count.
+    pub prompt_chars_final: usize,
+    /// Estimated total character size of the PR review prompt before budget drops.
+    pub estimated_size: usize,
+    /// Model context window in tokens (if known), used for prompt budget capping.
+    pub context_window: Option<u32>,
+    /// Short capped summary of findings from the prior review (incremental path only;
+    /// `None` for full reviews). Lists prior file+line findings so the AI avoids
+    /// restating them.
+    pub prior_findings: Option<String>,
+}
+
+impl ReviewContext {
+    /// Returns a formatted pre-flight summary for verbose output.
+    ///
+    /// Includes character counts and truncation status.
+    #[must_use]
+    pub fn verbose_summary(&self) -> String {
+        use std::fmt::Write;
+
+        let mut summary = String::new();
+
+        // Truncation summary
+        if self.files_truncated > 0 {
+            let _ = writeln!(
+                summary,
+                "Files truncated: {} ({} chars dropped)",
+                self.files_truncated, self.truncated_chars_dropped
+            );
+        }
+
+        summary
+    }
+
+    /// Records a file truncation event.
+    ///
+    /// Updates truncation counters and emits a debug log.
+    pub fn record_truncation(&mut self, filename: &str, original_len: usize, truncated_len: usize) {
+        self.files_truncated += 1;
+        self.truncated_chars_dropped += original_len - truncated_len;
+        tracing::debug!(
+            filename = %filename,
+            original_len,
+            truncated_len,
+            "file content truncated at prompt assembly"
+        );
+    }
+}
+
+impl Default for ReviewContext {
+    fn default() -> Self {
+        Self {
+            pr: crate::ai::types::PrDetails {
+                owner: String::new(),
+                repo: String::new(),
+                number: 0,
+                title: String::new(),
+                body: String::new(),
+                base_branch: String::new(),
+                head_branch: String::new(),
+                files: Vec::new(),
+                url: String::new(),
+                labels: Vec::new(),
+                head_sha: String::new(),
+                review_comments: Vec::new(),
+                instructions: None,
+                prior_findings: None,
+            },
+            max_chars_per_file: crate::config::ReviewConfig::default().max_chars_per_file,
+            max_diff_chars: crate::config::ReviewConfig::default().max_diff_chars,
+            max_patch_chars_per_file: crate::config::ReviewConfig::default()
+                .max_patch_chars_per_file,
+            files_truncated: 0,
+            truncated_chars_dropped: 0,
+            truncated_patch_files: Vec::new(),
+            files_total: 0,
+            files_with_patch: 0,
+            budget_drops: Vec::new(),
+            prompt_chars_final: 0,
+            estimated_size: 0,
+            context_window: None,
+            prior_findings: None,
+        }
+    }
+}
+
+mod budget;
+mod builder;
+mod truncation;
+
+pub(crate) use budget::effective_budget;
+
+pub use builder::build_review_context;
+pub use builder::prior_findings_summary;
+pub(crate) use truncation::truncate_at_line_boundary;
+
+#[allow(unused_imports)]
+pub(crate) use budget::drop_full_content_by_size;
+#[allow(unused_imports)]
+pub(crate) use budget::drop_patches_by_size;
+#[allow(unused_imports)]
+pub(crate) use budget::{PROMPT_OVERHEAD_CHARS, apply_budget_drops, estimate_pr_size};
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::types::PrFile;
+    use crate::config::ReviewConfig;
+
+    fn make_pr_with_content(patch_chars: usize, full_content_chars: usize) -> PrDetails {
+        PrDetails {
+            number: 1,
+            title: "test".to_string(),
+            body: String::new(),
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            url: "https://github.com/owner/repo/pull/1".to_string(),
+            head_branch: "feat".to_string(),
+            base_branch: "main".to_string(),
+            head_sha: String::new(),
+            review_comments: vec![],
+            files: vec![PrFile {
+                filename: "src/lib.rs".to_string(),
+                status: "modified".to_string(),
+                patch: Some("x".repeat(patch_chars)),
+                patch_truncated: false,
+                full_content: if full_content_chars > 0 {
+                    Some("y".repeat(full_content_chars))
+                } else {
+                    None
+                },
+                additions: 1,
+                deletions: 0,
+            }],
+            instructions: None,
+            prior_findings: None,
+            labels: vec![],
+        }
+    }
+
+    /// Verifies that `apply_budget_drops` enforces the documented drop order:
+    /// `full_content` -> patches.
+    #[test]
+    fn test_apply_budget_drops_order() {
+        let mut pr = make_pr_with_content(500, 500);
+
+        // Budget tight enough that full_content must be dropped first.
+        // Total with all: patch(500) + full_content(500)
+        //                + metadata(~30) + PROMPT_OVERHEAD_CHARS(1000) = ~2030
+        // Set budget to force full_content drop.
+        let max_prompt_chars = 600;
+
+        let mut drops = Vec::new();
+        apply_budget_drops(&mut pr, max_prompt_chars, 0, &mut drops);
+
+        // full_content dropped first (over budget)
+        assert!(
+            pr.files[0].full_content.is_none(),
+            "full_content should be dropped first when over budget"
+        );
+    }
+
+    /// Verifies that empty sections do NOT appear in `budget_drops` telemetry.
+    /// Regression test for telemetry accuracy bug where empty-section drops were unconditionally recorded.
+    #[test]
+    fn test_apply_budget_drops_empty_sections() {
+        let mut pr = make_pr_with_content(0, 0);
+
+        // Tight budget to trigger drop attempts, but sections are empty
+        let max_prompt_chars = 500;
+
+        let mut drops = Vec::new();
+        apply_budget_drops(&mut pr, max_prompt_chars, 0, &mut drops);
+
+        // Empty sections should NOT appear in budget_drops
+        // (they were cleared but no content was actually dropped)
+        assert_eq!(drops.len(), 0, "no content means no drops: {drops:?}");
+    }
+
+    /// Verifies that populated sections DO appear in `budget_drops` telemetry.
+    /// Ensures the fix does not suppress telemetry for sections with actual content.
+    #[test]
+    fn test_apply_budget_drops_populated_sections() {
+        let mut pr = make_pr_with_content(100, 100);
+
+        // Tight budget to force drops, with populated sections
+        let max_prompt_chars = 600;
+
+        let mut drops = Vec::new();
+        apply_budget_drops(&mut pr, max_prompt_chars, 0, &mut drops);
+
+        // Populated sections should appear in budget_drops (in priority order)
+        assert!(
+            drops.contains(&"file_content:src/lib.rs".to_string()),
+            "populated full_content should appear in budget_drops"
+        );
+    }
+
+    /// Regression test for issue #1548: verifies patch and `full_content` budget drops
+    /// use distinct prefixes ("`patch_truncated`:" vs "`file_content`:") to avoid collision.
+    #[test]
+    fn test_budget_drops_distinguish_patch_from_full_content() {
+        let mut pr = make_pr_with_content(500, 500);
+
+        // Budget tight enough to force BOTH a patch truncation and a full_content drop
+        let max_prompt_chars = 50;
+
+        let mut drops = Vec::new();
+        apply_budget_drops(&mut pr, max_prompt_chars, 0, &mut drops);
+
+        // The patch is truncated to leading hunks (final tier), not dropped
+        let patch = pr.files[0]
+            .patch
+            .as_deref()
+            .expect("patch must survive truncation");
+        assert!(!patch.is_empty(), "truncated patch must not be empty");
+        assert!(
+            patch.contains("[APTU: patch truncated due to prompt budget"),
+            "truncated patch must carry the marker"
+        );
+        assert!(
+            pr.files[0].full_content.is_none(),
+            "full_content should be dropped when over budget"
+        );
+
+        // Drops should contain exactly two distinct entries: one per tier
+        assert!(
+            drops.contains(&"patch_truncated:src/lib.rs".to_string()),
+            "budget_drops should contain 'patch_truncated:src/lib.rs' for the truncated patch"
+        );
+        assert!(
+            drops.contains(&"file_content:src/lib.rs".to_string()),
+            "budget_drops should contain 'file_content:src/lib.rs' for the dropped full_content"
+        );
+
+        // Verify they are distinct (not duplicates with the same prefix)
+        let patch_drops: Vec<_> = drops
+            .iter()
+            .filter(|s| s.starts_with("patch_truncated:"))
+            .collect();
+        let full_content_drops: Vec<_> = drops
+            .iter()
+            .filter(|s| s.starts_with("file_content:"))
+            .collect();
+        assert_eq!(
+            patch_drops.len(),
+            1,
+            "should have exactly one 'patch_truncated:' entry"
+        );
+        assert_eq!(
+            full_content_drops.len(),
+            1,
+            "should have exactly one 'file_content:' entry"
+        );
+    }
+
+    /// Creates a multi-line diff-style patch: a `diff --git` header followed by
+    /// `hunk_count` hunks, each a single line of `line_chars` characters.
+    fn make_diff_patch(line_chars: usize, hunk_count: usize) -> String {
+        let mut patch = String::from("diff --git a/src/lib.rs b/src/lib.rs\n");
+        for i in 0..hunk_count {
+            patch.push_str(&format!("hunk-{i}: {}\n", "z".repeat(line_chars)));
+        }
+        patch
+    }
+
+    /// Verifies the final budget tier truncates remaining patches to their
+    /// leading hunks with the marker, decrements the estimated size, and
+    /// records `patch_truncated`: telemetry entries (happy path).
+    #[test]
+    fn test_drop_patches_by_size_final_tier_truncates_with_marker() {
+        let mut files = vec![
+            crate::ai::types::PrFile {
+                filename: "a.rs".to_string(),
+                status: "modified".to_string(),
+                patch: Some(make_diff_patch(80, 12)), // ~1090 chars
+                patch_truncated: false,
+                full_content: None,
+                additions: 1,
+                deletions: 0,
+            },
+            crate::ai::types::PrFile {
+                filename: "b.rs".to_string(),
+                status: "modified".to_string(),
+                patch: Some(make_diff_patch(80, 6)), // ~570 chars
+                patch_truncated: false,
+                full_content: None,
+                additions: 1,
+                deletions: 0,
+            },
+        ];
+        let mut estimated_size = 3000_usize;
+        let mut drops = Vec::new();
+
+        drop_patches_by_size(&mut files, &mut estimated_size, 1000, &mut drops);
+
+        for file in &files {
+            let patch = file
+                .patch
+                .as_deref()
+                .expect("patch must survive truncation");
+            assert!(
+                patch.contains("[APTU: patch truncated due to prompt budget"),
+                "{} must carry the truncation marker",
+                file.filename
+            );
+            assert!(
+                patch.starts_with("diff --git a/src/lib.rs b/src/lib.rs\n"),
+                "{} must keep the diff header",
+                file.filename
+            );
+            assert!(
+                patch.len() < 700,
+                "{} must be shorter than the original patch",
+                file.filename
+            );
+            assert!(
+                drops.contains(&format!("patch_truncated:{}", file.filename)),
+                "truncation must be recorded in budget_drops: {drops:?}"
+            );
+        }
+        assert!(
+            estimated_size < 3000,
+            "estimated size must be decremented by the removed chars"
+        );
+    }
+
+    /// Edge case: a single patch larger than the entire budget still truncates
+    /// to the header plus at least one hunk-sized slice; it is never emptied.
+    #[test]
+    fn test_drop_patches_by_size_single_patch_larger_than_whole_budget() {
+        let mut files = vec![crate::ai::types::PrFile {
+            filename: "big.rs".to_string(),
+            status: "modified".to_string(),
+            patch: Some(make_diff_patch(80, 60)), // ~5000 chars
+            patch_truncated: false,
+            full_content: None,
+            additions: 1,
+            deletions: 0,
+        }];
+        let mut estimated_size = 5000_usize;
+        let mut drops = Vec::new();
+
+        drop_patches_by_size(&mut files, &mut estimated_size, 300, &mut drops);
+
+        let patch = files[0]
+            .patch
+            .as_deref()
+            .expect("patch must never be removed");
+        assert!(!patch.is_empty(), "truncated patch must never be empty");
+        assert!(
+            patch.starts_with("diff --git a/src/lib.rs b/src/lib.rs\n"),
+            "the diff header must survive"
+        );
+        assert!(
+            patch.contains("hunk-0:"),
+            "at least the first hunk line must survive"
+        );
+        assert!(
+            patch.contains("[APTU: patch truncated due to prompt budget"),
+            "the marker must be appended"
+        );
+        assert!(estimated_size < 5000, "estimated size must be decremented");
+        assert!(drops.contains(&"patch_truncated:big.rs".to_string()));
+    }
+
+    /// Verifies the per-patch truncation budget is derived from the budget
+    /// remaining after non-patch consumption: when earlier tiers already
+    /// consumed part of the budget, truncating every patch still lands the
+    /// PR within `max_prompt_chars` (regression for a fully truncated PR).
+    #[test]
+    fn test_drop_patches_by_size_fully_truncated_pr_fits_remaining_budget() {
+        let mut files: Vec<crate::ai::types::PrFile> = (0..2)
+            .map(|i| crate::ai::types::PrFile {
+                filename: format!("f{i}.rs"),
+                status: "modified".to_string(),
+                patch: Some(make_diff_patch(80, 60)), // ~5000 chars each
+                patch_truncated: false,
+                full_content: None,
+                additions: 1,
+                deletions: 0,
+            })
+            .collect();
+        let max_prompt_chars = 1000_usize;
+        // Non-patch sections already consumed 600 of the 1000-char budget.
+        let mut estimated_size = 600 + 2 * 5000;
+        let mut drops = Vec::new();
+
+        drop_patches_by_size(
+            &mut files,
+            &mut estimated_size,
+            max_prompt_chars,
+            &mut drops,
+        );
+
+        for file in &files {
+            assert!(
+                drops.contains(&format!("patch_truncated:{}", file.filename)),
+                "every patch must be truncated: {drops:?}"
+            );
+        }
+        assert!(
+            estimated_size <= max_prompt_chars,
+            "fully truncated PR must fit the prompt budget: {estimated_size} > {max_prompt_chars}"
+        );
+    }
+
+    /// Verifies that when the outline cannot fit (feature retired, so the
+    /// substitution path no longer exists), `drop_full_content_by_size` falls
+    /// back to fully clearing `full_content` without panicking.
+    #[test]
+    fn test_drop_full_content_by_size_outline_still_exceeds_budget() {
+        let mut files = vec![crate::ai::types::PrFile {
+            filename: "src/lib.rs".to_string(),
+            status: "modified".to_string(),
+            patch: None,
+            patch_truncated: false,
+            full_content: Some("y".repeat(2000)),
+            additions: 1,
+            deletions: 0,
+        }];
+        let mut estimated_size = 2000;
+        // A zero budget can never be satisfied, so this
+        // exercises the full-clear fallback path.
+        let max_prompt_chars = 0;
+        let mut drops = Vec::new();
+
+        drop_full_content_by_size(
+            &mut files,
+            &mut estimated_size,
+            max_prompt_chars,
+            &mut drops,
+        );
+
+        assert!(
+            files[0].full_content.is_none(),
+            "full_content should be fully cleared when the outline cannot fit"
+        );
+        assert!(
+            drops.contains(&"file_content:src/lib.rs".to_string()),
+            "budget_drops should record the full clear, not an outline substitution"
+        );
+    }
+
+    /// Verifies that an unsupported file extension falls back to fully clearing
+    /// `full_content` (the outline substitution path was retired).
+    #[test]
+    fn test_drop_full_content_by_size_unsupported_extension_falls_back() {
+        let mut files = vec![crate::ai::types::PrFile {
+            filename: "data.unsupportedext".to_string(),
+            status: "modified".to_string(),
+            patch: None,
+            patch_truncated: false,
+            full_content: Some("y".repeat(200)),
+            additions: 1,
+            deletions: 0,
+        }];
+        let mut estimated_size = 200;
+        let max_prompt_chars = 50;
+        let mut drops = Vec::new();
+
+        // The unsupported extension must take the plain full-clear path.
+        drop_full_content_by_size(
+            &mut files,
+            &mut estimated_size,
+            max_prompt_chars,
+            &mut drops,
+        );
+
+        assert!(
+            files[0].full_content.is_none(),
+            "full_content should be cleared for unsupported extensions"
+        );
+        assert!(
+            drops.contains(&"file_content:data.unsupportedext".to_string()),
+            "budget_drops should record the full clear for the unsupported extension"
+        );
+    }
+    /// Regression test for issue #1596: `full_content` must be evicted before patches,
+    /// so a PR with a small diff but a large `full_content` still keeps its patch.
+    #[test]
+    fn test_apply_budget_drops_full_content_evicted_before_patch() {
+        // patch is small, full_content alone is large enough to blow the budget.
+        let mut pr = make_pr_with_content(50, 1000);
+
+        // Base without full_content: patch(50) + metadata(~30) + overhead(1000) = ~1080.
+        // With full_content: + 1000 = ~2080. Budget sits between the two, so only
+        // full_content needs dropping to fit; the patch must survive untouched.
+        let max_prompt_chars = 1500;
+
+        let mut drops = Vec::new();
+        apply_budget_drops(&mut pr, max_prompt_chars, 0, &mut drops);
+
+        assert!(
+            pr.files[0].full_content.is_none(),
+            "full_content should be evicted first when over budget"
+        );
+        assert!(
+            pr.files[0].patch.is_some(),
+            "patch should survive when evicting full_content alone brings the prompt under budget"
+        );
+        assert!(
+            drops.contains(&"file_content:src/lib.rs".to_string()),
+            "budget_drops should record the file_content eviction"
+        );
+        assert!(
+            !drops.contains(&"patch:src/lib.rs".to_string()),
+            "budget_drops should not record a patch eviction"
+        );
+    }
+
+    /// Regression test for issue #1596 review feedback: when both `full_content` and
+    /// patches must be reduced across multiple files, `budget_drops` must record every
+    /// `file_content:` entry before any `patch_truncated`: entry, matching the call order.
+    #[test]
+    fn test_apply_budget_drops_records_full_content_before_patch_order() {
+        let mut pr = make_pr_with_content(500, 100);
+        pr.files.push(PrFile {
+            filename: "src/b.rs".to_string(),
+            status: "modified".to_string(),
+            patch: Some("x".repeat(500)),
+            patch_truncated: false,
+            full_content: Some("y".repeat(100)),
+            additions: 1,
+            deletions: 0,
+        });
+        // Tight enough that full_content is dropped AND both patches (500 chars each)
+        // exceed the per-patch budget (900 / 2 = 450) and get truncated.
+        let max_prompt_chars = 900;
+
+        let mut drops = Vec::new();
+        apply_budget_drops(&mut pr, max_prompt_chars, 0, &mut drops);
+
+        let last_file_content_idx = drops.iter().rposition(|d| d.starts_with("file_content:"));
+        let first_patch_idx = drops.iter().position(|d| d.starts_with("patch_truncated:"));
+        assert!(
+            last_file_content_idx.is_some() && first_patch_idx.is_some(),
+            "expected both file_content and patch_truncated entries in this scenario: {drops:?}"
+        );
+        assert!(
+            last_file_content_idx < first_patch_idx,
+            "every file_content: entry must precede every patch_truncated: entry in budget_drops: {drops:?}"
+        );
+    }
+    #[test]
+    fn test_verbose_summary_empty_context() {
+        // Arrange: ReviewContext with no enrichments and no repo path
+        let pr = make_pr_with_content(0, 0);
+        let ctx = ReviewContext {
+            pr,
+            ..Default::default()
+        };
+
+        // Act
+        let summary = ctx.verbose_summary();
+
+        // Assert: nothing to report means empty string
+        assert!(
+            summary.is_empty(),
+            "summary should be empty when no enrichments are present"
+        );
+    }
+
+    #[test]
+    fn test_verbose_summary_truncation_section_present_and_absent() {
+        // Arrange
+        let pr = make_pr_with_content(0, 0);
+
+        // Case 1: files_truncated > 0 -- section must be present
+        let ctx_with = ReviewContext {
+            pr: pr.clone(),
+            max_chars_per_file: 4_000,
+            files_truncated: 3,
+            truncated_chars_dropped: 900,
+            ..Default::default()
+        };
+        let summary = ctx_with.verbose_summary();
+        assert!(
+            summary.contains("Files truncated: 3 (900 chars dropped)"),
+            "verbose_summary must include truncation line when files_truncated > 0"
+        );
+
+        // Case 2: files_truncated == 0 -- section must be absent
+        let ctx_without = ReviewContext {
+            pr,
+            max_chars_per_file: 4_000,
+            ..Default::default()
+        };
+        let summary_clean = ctx_without.verbose_summary();
+        assert!(
+            !summary_clean.contains("Files truncated"),
+            "verbose_summary must omit truncation line when files_truncated == 0"
+        );
+    }
+    // -----------------------------------------------------------------------
+    // truncate_at_line_boundary tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_truncate_at_line_boundary_happy_path() {
+        // Content with newlines; truncation should land on last newline before limit
+        let content = "line 1\nline 2\nline 3\nline 4\nline 5\n";
+        // max_chars=20: chars "line 1\nline 2\nlin" -> find last '\n' -> "line 1\nline 2\n"
+        let result = truncate_at_line_boundary(content, 20);
+        assert_eq!(result, "line 1\nline 2\n");
+        assert!(
+            result.chars().count() <= 20,
+            "truncated result must not exceed max_chars"
+        );
+        assert!(
+            result.ends_with('\n'),
+            "truncation should end at newline boundary when one exists"
+        );
+    }
+
+    #[test]
+    fn test_truncate_at_line_boundary_fallback_no_newline() {
+        // Content with no newline; must fall back to char boundary
+        let content = "abcdefghijklmnopqrstuvwxyz";
+        let result = truncate_at_line_boundary(content, 10);
+        assert_eq!(result, "abcdefghij");
+        assert_eq!(result.chars().count(), 10);
+    }
+
+    #[test]
+    fn test_truncate_at_line_boundary_under_limit() {
+        // Content within limit should be returned unchanged
+        let content = "short";
+        let result = truncate_at_line_boundary(content, 100);
+        assert_eq!(result, "short");
+        assert_eq!(result.chars().count(), 5);
+    }
+
+    #[test]
+    fn test_truncate_at_line_boundary_multi_byte_utf8() {
+        // Multi-byte UTF-8 characters before the cut; must not panic
+        let content: String = (0..30).map(|_| "\u{1F600}").collect(); // 30 emoji chars
+        let result = truncate_at_line_boundary(&content, 25);
+        // 25 chars from 30 should give 25 emoji chars (no newline, so char boundary fallback)
+        assert_eq!(result.chars().count(), 25);
+        // Every char should be the emoji
+        assert!(result.chars().all(|c| c == '\u{1F600}'));
+    }
+    /// The prior-findings summary is rendered into the prompt, so the size
+    /// estimate for a context built with `prior_findings` must exceed the same
+    /// context built without it, and the estimate must still stay within the
+    /// configured budget (the summary is capped, so budget math covers it).
+    #[tokio::test]
+    async fn test_build_review_context_prior_findings_counted_in_estimate() {
+        // Arrange: identical PR, budget that fits the base context plus the
+        // capped prior-findings summary, with and without prior findings.
+        let make_pr = || {
+            let mut pr = make_pr_with_content(0, 0);
+            pr.files = vec![PrFile {
+                filename: "src/lib.rs".to_string(),
+                status: "modified".to_string(),
+                patch: Some("+// touched".to_string()),
+                patch_truncated: false,
+                full_content: None,
+                additions: 1,
+                deletions: 0,
+            }];
+            pr
+        };
+        let review_config = ReviewConfig::default();
+        // Maximal prior-findings summary: cap + per-entry overhead guard
+        // matches the bound asserted in builder.rs's prior_findings_tests.
+        let prior_findings = "x".repeat(super::builder::PRIOR_FINDINGS_MAX_CHARS);
+
+        // Act
+        let without = build_review_context(make_pr(), &review_config, None, 0, None, None)
+            .await
+            .expect("context without prior findings");
+        let with = build_review_context(
+            make_pr(),
+            &review_config,
+            None,
+            0,
+            None,
+            Some(prior_findings),
+        )
+        .await
+        .expect("context with prior findings");
+
+        // Assert: prior findings enlarge the estimate; budget stays intact.
+        assert!(
+            with.estimated_size > without.estimated_size,
+            "estimate with prior_findings ({}) must exceed estimate without ({})",
+            with.estimated_size,
+            without.estimated_size
+        );
+        let max_prompt_chars = review_config.max_prompt_chars;
+        assert!(
+            with.estimated_size <= max_prompt_chars,
+            "estimate with prior_findings ({}) must stay within budget ({})",
+            with.estimated_size,
+            max_prompt_chars
+        );
+    }
+    /// A non-empty PR whose patches exceed the budget must yield a truncated-patch
+    /// context (with the truncation marker), never `EmptyReviewContext`.
+    #[tokio::test]
+    async fn test_build_review_context_truncates_patch_instead_of_erroring() {
+        // Arrange: a single file with a sizable patch and full_content, and a budget
+        // so tiny that every section (including the patch, as a last resort) is reduced.
+        let pr = make_pr_with_content(2000, 2000);
+        let review_config = ReviewConfig {
+            max_prompt_chars: 1,
+            ..ReviewConfig::default()
+        };
+
+        // Act
+        let result = build_review_context(pr, &review_config, None, 0, None, None).await;
+
+        // Assert
+        let ctx = match result {
+            Ok(ctx) => ctx,
+            Err(crate::AptuError::EmptyReviewContext { files_total }) => {
+                panic!(
+                    "a non-empty PR must not trigger EmptyReviewContext (files_total={files_total})"
+                )
+            }
+            other => panic!("expected Ok review context, got {other:?}"),
+        };
+        let patch = ctx.pr.files[0]
+            .patch
+            .as_deref()
+            .expect("patch must survive as a truncated patch");
+        assert!(!patch.is_empty(), "truncated patch must not be empty");
+        assert!(
+            patch.contains("[APTU: patch truncated due to prompt budget"),
+            "truncated patch must carry the marker"
+        );
+        assert!(
+            ctx.budget_drops
+                .iter()
+                .any(|d| d == "patch_truncated:src/lib.rs"),
+            "truncation must be recorded in budget_drops: {:?}",
+            ctx.budget_drops
+        );
+    }
+
+    /// Regression test for issue #1596: an empty PR (no files) must not trigger the
+    /// zero-patch guard, since `files_with_patch == 0` is vacuously true there.
+    #[tokio::test]
+    async fn test_build_review_context_no_err_when_files_empty() {
+        // Arrange: a PR with zero files.
+        let mut pr = make_pr_with_content(0, 0);
+        pr.files = vec![];
+        let review_config = ReviewConfig {
+            max_prompt_chars: 1,
+            ..ReviewConfig::default()
+        };
+
+        // Act
+        let result = build_review_context(pr, &review_config, None, 0, None, None).await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "an empty-file PR should not trigger the zero-patch guard: {result:?}"
+        );
+    }
+
+    /// Regression test for issue #1596: a non-empty PR where no file ever had a
+    /// patch (e.g. binary-only content) must not trigger the zero-patch guard,
+    /// since `had_patches_pre_drop` is false rather than an eviction outcome.
+    #[tokio::test]
+    async fn test_build_review_context_no_err_when_no_patches_pre_drop() {
+        // Arrange: a single file with no patch and no full_content from the start,
+        // simulating a binary-only file with no diffable content.
+        let mut pr = make_pr_with_content(0, 0);
+        pr.files[0].patch = None;
+        let review_config = ReviewConfig::default();
+
+        // Act
+        let result = build_review_context(pr, &review_config, None, 0, None, None).await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "a non-empty PR with no pre-drop patches (binary-only) should not trigger the zero-patch guard: {result:?}"
+        );
+    }
+}

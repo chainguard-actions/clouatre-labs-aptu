@@ -1,0 +1,52 @@
+name: Test telemetry rollup with no review context
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gh CLI (not present in the act runner image)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          GH_VER=2.63.2
+          case "$(uname -m)" in
+            aarch64|arm64) GH_ARCH=arm64 ;;
+            *) GH_ARCH=amd64 ;;
+          esac
+          NAME="gh_${GH_VER}_linux_${GH_ARCH}"
+          D="$RUNNER_TEMP/gh-install"
+          mkdir -p "$D" "$RUNNER_TEMP/gh-bin"
+          curl -fsSL -o "$D/${NAME}.tar.gz" "https://github.com/cli/cli/releases/download/v${GH_VER}/${NAME}.tar.gz"
+          curl -fsSL -o "$D/checksums.txt" "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_checksums.txt"
+          (cd "$D" && grep " ${NAME}.tar.gz\$" checksums.txt | sha256sum -c -)
+          tar -xzf "$D/${NAME}.tar.gz" -C "$D"
+          install -m 0755 "$D/${NAME}/bin/gh" "$RUNNER_TEMP/gh-bin/gh"
+          echo "$RUNNER_TEMP/gh-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/gh-bin/gh" --version
+      - name: Ensure no review context or rollup file
+        run: |
+          rm -f "$RUNNER_TEMP/aptu-review-context.jsonl"
+          rm -rf "$GITHUB_WORKSPACE/.aptu-test"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          telemetry-rollup: 'true'
+          telemetry-rollup-path: .aptu-test/rollup.jsonl
+      - name: Assert action succeeded and no rollup written
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" != "success" ]; then
+            echo "FAIL: expected success"
+            exit 1
+          fi
+          if [ -e "$GITHUB_WORKSPACE/.aptu-test/rollup.jsonl" ]; then
+            echo "FAIL: rollup file should not be written without a context file"
+            cat "$GITHUB_WORKSPACE/.aptu-test/rollup.jsonl"
+            exit 1
+          fi
+          echo "PASS"

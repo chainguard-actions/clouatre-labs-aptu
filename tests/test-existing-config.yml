@@ -1,0 +1,51 @@
+name: Test existing user config is preserved
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gh CLI (not present in the act runner image)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          GH_VER=2.63.2
+          case "$(uname -m)" in
+            aarch64|arm64) GH_ARCH=arm64 ;;
+            *) GH_ARCH=amd64 ;;
+          esac
+          NAME="gh_${GH_VER}_linux_${GH_ARCH}"
+          D="$RUNNER_TEMP/gh-install"
+          mkdir -p "$D" "$RUNNER_TEMP/gh-bin"
+          curl -fsSL -o "$D/${NAME}.tar.gz" "https://github.com/cli/cli/releases/download/v${GH_VER}/${NAME}.tar.gz"
+          curl -fsSL -o "$D/checksums.txt" "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_checksums.txt"
+          (cd "$D" && grep " ${NAME}.tar.gz\$" checksums.txt | sha256sum -c -)
+          tar -xzf "$D/${NAME}.tar.gz" -C "$D"
+          install -m 0755 "$D/${NAME}/bin/gh" "$RUNNER_TEMP/gh-bin/gh"
+          echo "$RUNNER_TEMP/gh-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/gh-bin/gh" --version
+      - name: Pre-create user-managed config
+        run: |
+          mkdir -p "$HOME/.config/aptu"
+          printf '# user managed\n[ai]\nprovider = "anthropic"\n' > "$HOME/.config/aptu/config.toml"
+          cp "$HOME/.config/aptu/config.toml" "$RUNNER_TEMP/expected-config.toml"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: zai
+          fallback-model: some-model
+      - name: Assert config untouched
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          cat "$CFG"
+          if ! cmp -s "$CFG" "$RUNNER_TEMP/expected-config.toml"; then
+            echo "FAIL: user-managed config was modified"
+            exit 1
+          fi
+          if grep -q 'ai.fallback' "$CFG"; then
+            echo "FAIL: fallback section should not have been written"
+            exit 1
+          fi
+          echo "PASS"

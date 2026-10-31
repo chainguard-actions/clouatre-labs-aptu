@@ -241,7 +241,7 @@ runs:
     - name: Cache aptu binary
       id: cache-aptu
       if: steps.check-skip.outputs.skip != 'true'
-      uses: chainguard-actions/actions-cache@244dfed44d8c4e917b332280fb2c1063eda3d9be # v6
+      uses: chainguard-actions/actions-cache@46c2783c2418d3de33490be27a0d86c6268bc4fd # v6
       with:
         path: ~/.local/bin/aptu
         key: aptu-${{ steps.resolve-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}

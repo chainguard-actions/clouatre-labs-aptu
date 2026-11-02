@@ -519,7 +519,7 @@ runs:
 
     - name: Upload token usage artifact
       if: always()
-      uses: chainguard-actions/actions-upload-artifact@ebf8f2543b7189e9a67dcac1af8cabbc5d7a3fd6 # v7.0.2
+      uses: chainguard-actions/actions-upload-artifact@c91615377dcc230c6b156542d25044f9b8d80dd8 # v7.0.2
       with:
         name: aptu-token-usage-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-token-usage.jsonl
@@ -528,7 +528,7 @@ runs:
 
     - name: Upload review context artifact
       if: always()
-      uses: chainguard-actions/actions-upload-artifact@ebf8f2543b7189e9a67dcac1af8cabbc5d7a3fd6 # v7.0.2
+      uses: chainguard-actions/actions-upload-artifact@c91615377dcc230c6b156542d25044f9b8d80dd8 # v7.0.2
       with:
         name: aptu-review-context-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-review-context.jsonl

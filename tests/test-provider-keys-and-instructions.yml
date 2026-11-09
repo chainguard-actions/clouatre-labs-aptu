@@ -1,0 +1,70 @@
+name: Test provider API keys and instructions-file accepted (workflow_dispatch)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gh CLI (not present in the act runner image)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          GH_VERSION=2.63.2
+          case "$(uname -m)" in
+            aarch64|arm64) GH_ARCH=arm64 ;;
+            *) GH_ARCH=amd64 ;;
+          esac
+          DEST="$HOME/.gh-cli"
+          mkdir -p "$DEST"
+          curl -sSfL -o /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C "$DEST" --strip-components=1
+          "$DEST/bin/gh" --version
+          echo "$DEST/bin" >> "$GITHUB_PATH"
+      - name: Ensure no pre-existing aptu config
+        run: rm -f "$HOME/.config/aptu/config.toml"
+      - name: Create instructions file
+        run: |
+          mkdir -p "$RUNNER_TEMP/aptu-test"
+          echo "# Review instructions" > "$RUNNER_TEMP/aptu-test/pr-review.md"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: dummy-anthropic-key
+          gemini-api-key: dummy-gemini-key
+          openrouter-api-key: dummy-openrouter-key
+          zai-api-key: dummy-zai-key
+          provider: anthropic
+          model: claude-test-model
+          instructions-file: .github/instructions/pr-review.md
+          dry-run: 'true'
+          no-comment: 'true'
+      - name: Assert aptu binary installed and on PATH
+        run: |
+          if [ ! -x "$HOME/.local/bin/aptu" ]; then
+            echo "FAIL: aptu binary not installed"
+            exit 1
+          fi
+          command -v aptu >/dev/null 2>&1 || { echo "FAIL: aptu not on PATH"; exit 1; }
+          echo "PASS"
+      - name: Assert fallback config written with defaults (keys do not alter config)
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          cat "$CFG" || { echo "FAIL: config not written"; exit 1; }
+          grep -q 'provider = "openrouter"' "$CFG" || { echo "FAIL: fallback provider"; exit 1; }
+          grep -q 'model = "inception/mercury-2"' "$CFG" || { echo "FAIL: fallback model"; exit 1; }
+          if grep -q 'dummy-' "$CFG"; then
+            echo "FAIL: API key leaked into config file"; exit 1
+          fi
+          echo "PASS"
+      - name: Assert PR review did not run on workflow_dispatch
+        env:
+          ACTUAL: ${{ steps.action.outputs.pr-review-outcome }}
+        run: |
+          echo "actual: '$ACTUAL'"
+          if [ -n "$ACTUAL" ]; then
+            echo "FAIL: pr-review-outcome should be empty for workflow_dispatch"
+            exit 1
+          fi
+          echo "PASS"

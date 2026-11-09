@@ -1,0 +1,26 @@
+{
+  "summary": "",
+  "suggested_labels": ["label1", "label2"],
+  "clarifying_questions": ["question1", "question2"],
+  "potential_duplicates": ["#123", "#456"],
+  "related_issues": [
+    {
+      "number": 789,
+      "title": "Related issue title",
+      "reason": ""
+    }
+  ],
+  "status_note": "",
+  "contributor_guidance": {
+    "beginner_friendly": true,
+    "reasoning": ""
+  },
+  "implementation_approach": "",
+  "suggested_milestone": "",
+  "complexity": {
+    "level": "low|medium|high",
+    "estimated_loc": 150,
+    "affected_areas": ["crates/aptu-core/src/ai/types.rs"],
+    "recommendation": ""
+  }
+}

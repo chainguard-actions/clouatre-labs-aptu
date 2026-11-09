@@ -1,0 +1,48 @@
+name: Test existing user config is preserved
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gh CLI (not present in the act runner image)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          GH_VERSION=2.63.2
+          case "$(uname -m)" in
+            aarch64|arm64) GH_ARCH=arm64 ;;
+            *) GH_ARCH=amd64 ;;
+          esac
+          DEST="$HOME/.gh-cli"
+          mkdir -p "$DEST"
+          curl -sSfL -o /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C "$DEST" --strip-components=1
+          "$DEST/bin/gh" --version
+          echo "$DEST/bin" >> "$GITHUB_PATH"
+      - name: Create user-managed config
+        run: |
+          mkdir -p "$HOME/.config/aptu"
+          printf '# user managed\n[ai]\nprovider = "anthropic"\n' > "$HOME/.config/aptu/config.toml"
+          sha256sum "$HOME/.config/aptu/config.toml" | awk '{print $1}' > /tmp/cfg-before.sha
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: zai
+          fallback-model: some-model
+          dry-run: 'true'
+      - name: Assert config unchanged
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          cat "$CFG"
+          AFTER=$(sha256sum "$CFG" | awk '{print $1}')
+          BEFORE=$(cat /tmp/cfg-before.sha)
+          if [ "$AFTER" != "$BEFORE" ]; then
+            echo "FAIL: user-managed config was modified"; exit 1
+          fi
+          if grep -q 'ai.fallback' "$CFG"; then
+            echo "FAIL: fallback section should not be written"; exit 1
+          fi
+          echo "PASS"

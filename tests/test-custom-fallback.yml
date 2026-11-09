@@ -1,0 +1,44 @@
+name: Test custom fallback provider and model
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gh CLI (not present in the act runner image)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          GH_VERSION=2.63.2
+          case "$(uname -m)" in
+            aarch64|arm64) GH_ARCH=arm64 ;;
+            *) GH_ARCH=amd64 ;;
+          esac
+          DEST="$HOME/.gh-cli"
+          mkdir -p "$DEST"
+          curl -sSfL -o /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C "$DEST" --strip-components=1
+          "$DEST/bin/gh" --version
+          echo "$DEST/bin" >> "$GITHUB_PATH"
+      - name: Ensure no pre-existing aptu config
+        run: rm -f "$HOME/.config/aptu/config.toml"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          fallback-provider: gemini
+          fallback-model: gemini-3.1-flash-lite
+          dry-run: 'true'
+      - name: Assert custom fallback config written
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          cat "$CFG" || { echo "FAIL: config not written"; exit 1; }
+          EXPECTED='chain = [{ provider = "gemini", model = "gemini-3.1-flash-lite" }]'
+          if ! grep -qF "$EXPECTED" "$CFG"; then
+            echo "FAIL: expected line: $EXPECTED"; exit 1
+          fi
+          if grep -q 'openrouter' "$CFG"; then
+            echo "FAIL: default provider should not be present"; exit 1
+          fi
+          echo "PASS"

@@ -1,0 +1,47 @@
+name: Test telemetry rollup with no review context
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gh CLI (not present in the act runner image)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          GH_VERSION=2.63.2
+          case "$(uname -m)" in
+            aarch64|arm64) GH_ARCH=arm64 ;;
+            *) GH_ARCH=amd64 ;;
+          esac
+          DEST="$HOME/.gh-cli"
+          mkdir -p "$DEST"
+          curl -sSfL -o /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C "$DEST" --strip-components=1
+          "$DEST/bin/gh" --version
+          echo "$DEST/bin" >> "$GITHUB_PATH"
+      - name: Ensure no review context file
+        run: |
+          rm -f "$RUNNER_TEMP/aptu-review-context.jsonl"
+          rm -rf "$GITHUB_WORKSPACE/.telemetry-test"
+      - id: action
+        uses: .
+        with:
+          github-token: ${{ github.token }}
+          dry-run: 'true'
+          telemetry-rollup: 'true'
+          telemetry-rollup-path: .telemetry-test/rollup.jsonl
+      - name: Assert action succeeded and no rollup written
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" != "success" ]; then
+            echo "FAIL: action should succeed"; exit 1
+          fi
+          if [ -e "$GITHUB_WORKSPACE/.telemetry-test/rollup.jsonl" ]; then
+            cat "$GITHUB_WORKSPACE/.telemetry-test/rollup.jsonl"
+            echo "FAIL: rollup must not be written without a context file"; exit 1
+          fi
+          echo "PASS"

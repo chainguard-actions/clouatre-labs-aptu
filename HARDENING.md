@@ -10,29 +10,33 @@
 
 **Harden Agent Version:** `2`
 
-Action **clouatre-labs--aptu/v0.12.2** was hardened automatically. 1 finding(s) were identified and resolved across 1 iteration(s).
+Action **clouatre-labs--aptu/v0.12.2** was hardened automatically. 2 finding(s) were identified and resolved across 1 iteration(s).
 
 ## Findings Fixed
 
 ### script-injection (severity: high)
 
-Sub-rule (a): A `${{ }}` expression is interpolated directly inside a `run:` shell command string in the "Roll up anonymized review-context telemetry" step. The offending line is:
-
-  run: "${{ github.action_path }}/scripts/telemetry-rollup.sh \"$APTU_CONTEXT_FILE\" \"$TELEMETRY_ROLLUP_PATH\" || true"
-
-The `${{ github.action_path }}` expression is substituted by the Actions template engine before the shell executes the command. Although `github.action_path` is not directly attacker-controlled, any `${{ ... }}` expression directly inside a `run:` block is a script-injection finding per the check rules. The fix is to move the path into an `env:` variable (e.g. `ACTION_PATH: ${{ github.action_path }}`) and reference it as `"$ACTION_PATH"` in the run script.
+Rule (a) broken: the 'Roll up anonymized review-context telemetry' step puts a GitHub Actions expression straight into its run: string. Offending line: run: "${{ github.action_path }}/scripts/telemetry-rollup.sh \"$APTU_CONTEXT_FILE\" \"$TELEMETRY_ROLLUP_PATH\" || true". The expression is filled in by template substitution before the shell parses the line. Fix: map github.action_path to an env var (e.g. ACTION_PATH: ${{ github.action_path }}) and call "$ACTION_PATH/scripts/telemetry-rollup.sh" with the variable in double quotes.
 
 Locations:
 
-- `action.yml:530`
+- `action.yml:576`
+
+### github-env-injection (severity: high)
+
+The 'Setup PATH' step writes the inherited process env var $HOME to $GITHUB_PATH without sanitizing it first: echo "$HOME/.local/bin" >> "$GITHUB_PATH". HOME is not set inside this run: script, and the calling workflow's env can override it in a composite action. Under rule (e) it counts as workflow-controlled. This is a strict-reading finding: the runner sets HOME, and a newline in it is unlikely in practice. Fix: safe=$(printf '%s' "$HOME/.local/bin" | tr -d '\n\r'); echo "$safe" >> "$GITHUB_PATH".
+
+Locations:
+
+- `action.yml:304`
 
 ## Iteration Notes
 
 ### Iteration 1
 
-**Fixes applied:** script-injection
+**Fixes applied:** script-injection, github-env-injection
 
 **Notes:**
 
-Fixed script-injection in action.yml line 530 ("Roll up anonymized review-context telemetry" step): moved `${{ github.action_path }}` from the `run:` shell command string into the step's `env:` block as `ACTION_PATH: ${{ github.action_path }}`, and updated the run command to reference it as `$ACTION_PATH`.
+Telemetry rollup step: moved github.action_path into env ACTION_PATH and invoke "$ACTION_PATH/scripts/telemetry-rollup.sh" quoted. Setup PATH step: strip CR/LF from "$HOME/.local/bin" before appending to $GITHUB_PATH.
 

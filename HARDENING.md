@@ -10,25 +10,39 @@
 
 **Harden Agent Version:** `2`
 
-Action **clouatre-labs--aptu/v0.12.1** was hardened automatically. 1 finding(s) were identified and resolved across 1 iteration(s).
+Action **clouatre-labs--aptu/v0.12.1** was hardened automatically. 2 finding(s) were identified and resolved across 1 iteration(s).
 
 ## Findings Fixed
 
 ### script-injection (severity: high)
 
-Sub-rule (a): The 'Roll up anonymized review-context telemetry' step directly interpolates `${{ github.action_path }}` inside the `run:` shell command string. Any `${{ ... }}` expression embedded directly in a `run:` block is a script-injection risk because the value is substituted by the YAML template engine before the shell ever sees it, bypassing shell quoting. The offending line is: `run: "${{ github.action_path }}/scripts/telemetry-rollup.sh \"$APTU_CONTEXT_FILE\" \"$TELEMETRY_ROLLUP_PATH\" || true"`. The fix is to use the `$GITHUB_ACTION_PATH` environment variable instead: `run: "$GITHUB_ACTION_PATH/scripts/telemetry-rollup.sh ..."`, which is already available as a safe env var in composite actions.
+Rule (a): the 'Roll up anonymized review-context telemetry' step puts a GitHub expression straight into its run: string: `run: "${{ github.action_path }}/scripts/telemetry-rollup.sh \"$APTU_CONTEXT_FILE\" \"$TELEMETRY_ROLLUP_PATH\" || true"`. The expression is filled in by template substitution before the shell parses the line. Fix: use the shell-quoted env var instead, e.g. "$GITHUB_ACTION_PATH/scripts/telemetry-rollup.sh".
 
 Locations:
 
-- `action.yml:490`
+- `action.yml:635`
+
+### github-env-injection (severity: high)
+
+The 'Setup PATH' step writes an inherited process env var to $GITHUB_PATH without sanitizing it first: `echo "$HOME/.local/bin" >> "$GITHUB_PATH"`. The calling workflow can set HOME, so a composite action must treat it as workflow-controlled. Under rule (e), the value needs `printf '%s' ... | tr -d '\n\r'` before the write.
+
+Locations:
+
+- `action.yml:334`
 
 ## Iteration Notes
 
 ### Iteration 1
 
-**Fixes applied:** script-injection
+**Fixes applied:** script-injection, github-env-injection
 
 **Notes:**
 
-Fixed the script-injection vulnerability in the 'Roll up anonymized review-context telemetry' step (action.yml line 490). Replaced `${{ github.action_path }}/scripts/telemetry-rollup.sh` with `$GITHUB_ACTION_PATH/scripts/telemetry-rollup.sh`. The `$GITHUB_ACTION_PATH` environment variable is automatically set by GitHub Actions for composite actions and is the safe alternative to the template expression, which was being substituted by the YAML engine before the shell could apply any quoting.
+I fixed both findings in action.yml.
+
+1. Script injection: the telemetry roll-up step now runs "$GITHUB_ACTION_PATH/scripts/telemetry-rollup.sh" (quoted) instead of putting the github.action_path expression directly in the run: line. The arguments and the trailing '|| true' are unchanged.
+
+2. GITHUB_PATH write: the Setup PATH step now removes newline and carriage-return characters from "$HOME/.local/bin" (piped through tr -d '\n\r') before appending it to $GITHUB_PATH.
+
+Nothing has been run or re-analysed yet.
 

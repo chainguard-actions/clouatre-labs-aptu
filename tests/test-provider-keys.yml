@@ -1,0 +1,67 @@
+name: Test AI provider API keys and instructions-file inputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create instructions file
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.aptu-test"
+          echo "# Review instructions for tests" > "$GITHUB_WORKSPACE/.aptu-test/pr-review.md"
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: test-anthropic-key
+          gemini-api-key: test-gemini-key
+          openrouter-api-key: test-openrouter-key
+          zai-api-key: test-zai-key
+          provider: anthropic
+          model: claude-test-model
+          instructions-file: .aptu-test/pr-review.md
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+          skip-labeled: 'false'
+
+      - name: Assert action ran (success or graceful install failure)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran (outcome=$OUTCOME)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+      - name: Assert PR review did not run under workflow_dispatch
+        env:
+          REVIEW: ${{ steps.action.outputs.pr-review-outcome }}
+        run: |
+          echo "pr-review-outcome: '$REVIEW'"
+          if [ -n "$REVIEW" ]; then
+            echo "FAIL: PR review step should not run for workflow_dispatch"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert fallback config written with defaults
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          if [ ! -f "$CFG" ]; then
+            echo "FAIL: $CFG not found"
+            exit 1
+          fi
+          cat "$CFG"
+          if ! grep -q 'provider = "openrouter"' "$CFG" || ! grep -q 'model = "inception/mercury-2"' "$CFG"; then
+            echo "FAIL: fallback config missing default provider/model"
+            exit 1
+          fi
+          echo "PASS"

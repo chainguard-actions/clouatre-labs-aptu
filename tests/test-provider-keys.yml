@@ -1,0 +1,63 @@
+name: Test provider API keys and instructions-file inputs (workflow_dispatch)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create instructions file and clear any prior aptu config
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.aptu-test"
+          echo "# Review instructions for test" > "$GITHUB_WORKSPACE/.aptu-test/instructions.md"
+          rm -f "$HOME/.config/aptu/config.toml"
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: dummy-anthropic-key-not-used
+          gemini-api-key: dummy-gemini-key-not-used
+          openrouter-api-key: dummy-openrouter-key-not-used
+          zai-api-key: dummy-zai-key-not-used
+          provider: gemini
+          model: gemini-3.1-flash-lite
+          instructions-file: .aptu-test/instructions.md
+          dry-run: 'true'
+          no-comment: 'true'
+          apply-labels: 'false'
+
+      - name: Assert outcome and no PR review under workflow_dispatch
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          PR_REVIEW_OUTCOME: ${{ steps.action.outputs.pr-review-outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          echo "pr-review-outcome: '$PR_REVIEW_OUTCOME'"
+          if [ "$OUTCOME" != "success" ] && [ "$OUTCOME" != "failure" ]; then
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+          # No pull_request event: the PR review step (which uses the API keys
+          # and instructions-file) must not run, so the output stays empty.
+          if [ -n "$PR_REVIEW_OUTCOME" ]; then
+            echo "FAIL: expected empty pr-review-outcome under workflow_dispatch"
+            exit 1
+          fi
+          echo "PASS: outcome '$OUTCOME', PR review not triggered"
+
+      - name: Assert default fallback config was written
+        run: |
+          CFG="$HOME/.config/aptu/config.toml"
+          if [ ! -f "$CFG" ]; then
+            echo "FAIL: $CFG not found"
+            exit 1
+          fi
+          cat "$CFG"
+          if ! grep -q 'provider = "openrouter"' "$CFG" || ! grep -q 'model = "inception/mercury-2"' "$CFG"; then
+            echo "FAIL: config does not contain default fallback chain"
+            exit 1
+          fi
+          echo "PASS"

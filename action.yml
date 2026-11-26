@@ -1,14 +1,17 @@
 name: Aptu
 description: "GitHub automation: AI issue triage, AI PR review, PR labeling, security scanning, and PR queue ranking"
 author: Aptu Contributors
+
 branding:
   icon: zap
   color: blue
+
 inputs:
   # --- Auth ---
   github-token:
     description: GitHub token for API access
     required: true
+
   # --- AI provider API keys (alphabetical) ---
   anthropic-api-key:
     description: Anthropic API key (from https://console.anthropic.com/settings/keys)
@@ -31,42 +34,48 @@ inputs:
   zenmux-api-key:
     description: ZenMux API key (from https://zenmux.ai)
     required: false
+
   # --- AI model selection ---
   provider:
     description: >
-      AI provider to use (anthropic, cerebras, gemini, groq, openrouter, zai, zenmux). Defaults to openrouter when not set.
-
+      AI provider to use (anthropic, cerebras, gemini, groq, openrouter, zai, zenmux).
+      Defaults to openrouter when not set.
     required: false
     default: ''
   model:
     description: >
-      Model identifier for the selected provider. Defaults to mistralai/mistral-small-2603 when provider is openrouter, or gemini-3.1-flash-lite when provider is gemini. See docs/CONFIGURATION.md for per-provider model lists.
-
+      Model identifier for the selected provider. Defaults to mistralai/mistral-small-2603
+      when provider is openrouter, or gemini-3.1-flash-lite when provider is gemini.
+      See docs/CONFIGURATION.md for per-provider model lists.
     required: false
     default: ''
   fallback-provider:
     description: >
-      AI provider to try when the primary provider fails (resilience chain). Independent of the primary provider default; set to empty string to disable fallback.
-
+      AI provider to try when the primary provider fails (resilience chain).
+      Independent of the primary provider default; set to empty string to disable fallback.
     required: false
     default: 'openrouter'
   fallback-model:
     description: Model for the fallback provider.
     required: false
     default: 'inception/mercury-2'
+
   # --- Privacy controls ---
   openrouter-data-collection:
     description: >
-      OpenRouter data collection policy: "deny" (default) or "allow". When set to "deny", OpenRouter is instructed not to retain or use prompts and outputs for training. Only affects the OpenRouter provider.
-
+      OpenRouter data collection policy: "deny" (default) or "allow".
+      When set to "deny", OpenRouter is instructed not to retain or use
+      prompts and outputs for training. Only affects the OpenRouter provider.
     required: false
     default: 'deny'
   openrouter-zdr:
     description: >
-      OpenRouter Zero Data Retention flag (default: true). When true, OpenRouter is instructed to enforce zero data retention. Only affects the OpenRouter provider.
-
+      OpenRouter Zero Data Retention flag (default: true).
+      When true, OpenRouter is instructed to enforce zero data retention.
+      Only affects the OpenRouter provider.
     required: false
     default: 'true'
+
   # --- Behavior flags (alphabetical) ---
   apply-labels:
     description: Apply AI-suggested labels and milestone (issue triage and PR review)
@@ -82,170 +91,203 @@ inputs:
     default: 'false'
   skip-labeled:
     description: >
-      Skip triage if the issue already has both a label with the `type:` prefix and a label matching `p[0-9]` (e.g. `p0`, `p1`, `p2`, `p3`). Only meaningful for issue events; set to `false` for PR events.
-
+      Skip triage if the issue already has both a label with the `type:` prefix
+      and a label matching `p[0-9]` (e.g. `p0`, `p1`, `p2`, `p3`).
+      Only meaningful for issue events; set to `false` for PR events.
     required: false
     default: 'true'
+
   # --- Issue triage ---
   repo:
     description: >
-      Target repository (owner/repo) for repository_dispatch invocations. When set alongside pull-number or issue-number, the PR label, PR review, and issue triage steps fire on repository_dispatch events.
-
+      Target repository (owner/repo) for repository_dispatch invocations. When set alongside
+      pull-number or issue-number, the PR label, PR review, and issue triage steps fire on
+      repository_dispatch events.
     required: false
     default: ''
   pull-number:
     description: >
-      PR number for repository_dispatch invocations. Must be set alongside repo to trigger PR label and PR review steps on repository_dispatch events.
-
+      PR number for repository_dispatch invocations. Must be set alongside repo to trigger
+      PR label and PR review steps on repository_dispatch events.
     required: false
     default: ''
   issue-number:
     description: >
-      Issue number for repository_dispatch invocations. Must be set alongside repo to trigger the issue triage step on repository_dispatch events.
-
+      Issue number for repository_dispatch invocations. Must be set alongside repo to trigger
+      the issue triage step on repository_dispatch events.
     required: false
     default: ''
   since:
     description: >
-      For scheduled batch triage: triage all issues without labels created since this date (YYYY-MM-DD or RFC3339). If empty, all unlabeled issues in the repository are triaged. Only used when the workflow is triggered by a schedule event.
-
+      For scheduled batch triage: triage all issues without labels created since this date
+      (YYYY-MM-DD or RFC3339). If empty, all unlabeled issues in the repository are triaged.
+      Only used when the workflow is triggered by a schedule event.
     required: false
     default: ''
   issue-state:
     description: >
-      For scheduled batch triage: filter issues by state (open, closed, all). Only used when the workflow is triggered by a schedule event.
-
+      For scheduled batch triage: filter issues by state (open, closed, all).
+      Only used when the workflow is triggered by a schedule event.
     required: false
     default: 'open'
+
   # --- PR review ---
   instructions-file:
     description: >
-      Path to repository instructions file for PR review context. When set, overrides the default AGENTS.md and .github/instructions/pr-review.md files. Leave empty to use default file discovery.
-
+      Path to repository instructions file for PR review context.
+      When set, overrides the default AGENTS.md and .github/instructions/pr-review.md files.
+      Leave empty to use default file discovery.
     required: false
   repo-path:
     description: >
-      Path to the local repository root for AST context injection into PR review prompts. When set (or inferred from the current working directory when omitted), `aptu pr review` will analyse changed source files (Rust, Python, Go, Java, TypeScript, TSX, JavaScript, C, C++, C#, Fortran) and append function signatures and call-graph context to the prompt. Set to an explicit path to override CWD inference.
-
+      Path to the local repository root for AST context injection into PR review prompts.
+      When set (or inferred from the current working directory when omitted), `aptu pr review`
+      will analyse changed source files (Rust, Python, Go, Java, TypeScript, TSX, JavaScript,
+      C, C++, C#, Fortran) and append function signatures and call-graph context to the prompt.
+      Set to an explicit path to override CWD inference.
     required: false
     default: ''
   deep:
     description: >
-      Force cross-file call graph context in PR review unconditionally. When omitted, call graph is auto-enabled when budget_remaining (= max_prompt_chars minus the pre-call-graph prompt size estimate) exceeds min-budget-for-call-graph. Set to 'true' to always include call graph regardless of available budget.
-
+      Force cross-file call graph context in PR review unconditionally. When omitted, call
+      graph is auto-enabled when budget_remaining (= max_prompt_chars minus the pre-call-graph
+      prompt size estimate) exceeds min-budget-for-call-graph. Set to 'true' to always
+      include call graph regardless of available budget.
     required: false
     default: 'false'
   max-prompt-chars:
     description: >
-      Total prompt character budget for PR review. When the assembled prompt exceeds this limit, sections are dropped in order: call graph, AST, full file content, diff hunks. System prompt and PR metadata are never dropped. Maps to [review] max_prompt_chars in config.toml.
-
+      Total prompt character budget for PR review. When the assembled prompt exceeds
+      this limit, sections are dropped in order: call graph, AST, full file content,
+      diff hunks. System prompt and PR metadata are never dropped.
+      Maps to [review] max_prompt_chars in config.toml.
     required: false
     default: '120000'
   max-full-content-files:
     description: >
-      Maximum number of files fetched in full via the GitHub Contents API per review. Maps to [review] max_full_content_files in config.toml.
-
+      Maximum number of files fetched in full via the GitHub Contents API per review.
+      Maps to [review] max_full_content_files in config.toml.
     required: false
     default: '10'
   max-chars-per-file:
     description: >
-      Maximum characters of full file content included per file in the review prompt. Maps to [review] max_chars_per_file in config.toml.
-
+      Maximum characters of full file content included per file in the review prompt.
+      Maps to [review] max_chars_per_file in config.toml.
     required: false
     default: '16000'
   max-diff-chars:
     description: >
-      Maximum total diff characters across all files in the review prompt. Diffs exceeding this limit are dropped from the prompt before assembly. Maps to [review] max_diff_chars in config.toml.
-
+      Maximum total diff characters across all files in the review prompt.
+      Diffs exceeding this limit are dropped from the prompt before assembly.
+      Maps to [review] max_diff_chars in config.toml.
     required: false
     default: '200000'
   max-patch-chars-per-file:
     description: >
-      Maximum characters for an individual file patch in the review prompt. File patches exceeding this limit are dropped entirely rather than sliced mid-hunk. Maps to [review] max_patch_chars_per_file in config.toml.
-
+      Maximum characters for an individual file patch in the review prompt.
+      File patches exceeding this limit are dropped entirely rather than sliced mid-hunk.
+      Maps to [review] max_patch_chars_per_file in config.toml.
     required: false
     default: '10000'
   max-instructions-chars:
     description: >
-      Maximum characters of instructions file content included in the review prompt. Maps to [review] max_instructions_chars in config.toml.
-
+      Maximum characters of instructions file content included in the review prompt.
+      Maps to [review] max_instructions_chars in config.toml.
     required: false
     default: '1500'
   min-budget-for-call-graph:
     description: >
-      Minimum remaining prompt budget (chars) to auto-enable call-graph enrichment. budget_remaining = max-prompt-chars minus the pre-call-graph prompt size estimate; call graph is built only when budget_remaining > this value (strict greater-than). Setting this above half of max-prompt-chars means call graph rarely fires; setting it >= max-prompt-chars disables auto-enable entirely (use deep: true instead). Set to 0 to always include call graph when repo-path is available. Maps to [review] min_budget_for_call_graph in config.toml.
-
+      Minimum remaining prompt budget (chars) to auto-enable call-graph enrichment.
+      budget_remaining = max-prompt-chars minus the pre-call-graph prompt size estimate;
+      call graph is built only when budget_remaining > this value (strict greater-than).
+      Setting this above half of max-prompt-chars means call graph rarely fires;
+      setting it >= max-prompt-chars disables auto-enable entirely (use deep: true instead).
+      Set to 0 to always include call graph when repo-path is available.
+      Maps to [review] min_budget_for_call_graph in config.toml.
     required: false
     default: '20000'
   max-dep-packages:
     description: >
-      Maximum number of dependency bump packages for which upstream release notes are fetched and included in the review prompt. Maps to [review] max_dep_packages in config.toml.
-
+      Maximum number of dependency bump packages for which upstream release notes
+      are fetched and included in the review prompt.
+      Maps to [review] max_dep_packages in config.toml.
     required: false
     default: '3'
   max-dep-release-chars:
     description: >
-      Maximum characters of upstream release notes included per dependency package. Maps to [review] max_dep_release_chars in config.toml.
-
+      Maximum characters of upstream release notes included per dependency package.
+      Maps to [review] max_dep_release_chars in config.toml.
     required: false
     default: '2000'
   max-diff-bytes:
     description: >
-      Maximum bytes for the raw PR diff; prompt-injection defence pre-check applied before prompt assembly. Raise for large refactor PRs. Maps to [prompt] max_diff_bytes in config.toml.
-
+      Maximum bytes for the raw PR diff; prompt-injection defence pre-check applied
+      before prompt assembly. Raise for large refactor PRs.
+      Maps to [prompt] max_diff_bytes in config.toml.
     required: false
     default: '524288'
+
   # --- Scan security ---
   scan-path:
     description: >
-      Path to scan for security issues with aptu scan-security. Leave empty to skip the security scan step.
-
+      Path to scan for security issues with aptu scan-security.
+      Leave empty to skip the security scan step.
     required: false
     default: ''
   scan-security-diff:
     description: >
-      Path to a unified diff file to scan for security issues (overrides scan-path when set). Leave empty to use scan-path directory scan.
-
+      Path to a unified diff file to scan for security issues (overrides scan-path when set).
+      Leave empty to use scan-path directory scan.
     required: false
     default: ''
   fail-on:
     description: >
-      Comma-separated severities (critical,high,medium,low) that fail the security scan step. When set, the scan blocks the workflow on findings at or above the threshold. Leave empty to keep the scan non-blocking (advisory only).
-
+      Comma-separated severities (critical,high,medium,low) that fail the security
+      scan step. When set, the scan blocks the workflow on findings at or above the
+      threshold. Leave empty to keep the scan non-blocking (advisory only).
     required: false
     default: ''
   scan-exclude:
     description: >
-      Comma-or-newline-separated path prefixes to exclude from aptu scan-security (e.g. examples/,vendor/). Each entry is passed as a separate --exclude flag. Leave empty to scan every non-ignored path.
-
+      Comma-or-newline-separated path prefixes to exclude from aptu scan-security
+      (e.g. examples/,vendor/). Each entry is passed as a separate --exclude flag.
+      Leave empty to scan every non-ignored path.
     required: false
     default: ''
   sarif-upload:
     description: >
-      Set to 'false' to skip uploading the SARIF report to code scanning. Use when the scan runs outside the target repository (for example, a centralized scan that uploads SARIF itself). Defaults to 'true'.
-
+      Set to 'false' to skip uploading the SARIF report to code scanning. Use when
+      the scan runs outside the target repository (for example, a centralized scan
+      that uploads SARIF itself). Defaults to 'true'.
     required: false
     default: 'true'
+
   # --- PR queue ---
   pr-queue:
     description: >
-      Run aptu pr queue to output a ranked reviewability list of open PRs. Useful for workflow_dispatch or scheduled summary workflows.
-
+      Run aptu pr queue to output a ranked reviewability list of open PRs.
+      Useful for workflow_dispatch or scheduled summary workflows.
     required: false
     default: 'false'
+
   # --- Telemetry rollup ---
   telemetry-rollup:
     description: >
-      Set to 'true' to fold this run's own review context JSONL into anonymized, aggregate-only counters (reviews_total, truncation_events_total, model_tier_counts, and similar) and append them to telemetry-rollup-path. Makes no network call, and discards pr and github_actor before writing. Defaults to 'false' (no behavior change when unset).
-
+      Set to 'true' to fold this run's own review context JSONL into anonymized,
+      aggregate-only counters (reviews_total, truncation_events_total,
+      model_tier_counts, and similar) and append them to telemetry-rollup-path.
+      Makes no network call, and discards pr and github_actor before writing.
+      Defaults to 'false' (no behavior change when unset).
     required: false
     default: 'false'
   telemetry-rollup-path:
     description: >
-      Destination path, relative to the consuming repository's checkout, that the telemetry-rollup counters are appended to. Operator-controlled; not a hosted or central endpoint.
-
+      Destination path, relative to the consuming repository's checkout, that
+      the telemetry-rollup counters are appended to. Operator-controlled; not
+      a hosted or central endpoint.
     required: false
     default: '.aptu/telemetry-rollup.jsonl'
+
   # --- Routing (legacy) ---
   command:
     description: Command to run (issue or pr)
@@ -255,6 +297,7 @@ inputs:
     description: Subcommand to run (triage for issue, label or review for pr)
     required: false
     default: 'triage'
+
 outputs:
   input-tokens:
     description: Total input tokens consumed across all AI calls in this run
@@ -277,6 +320,7 @@ outputs:
   pr-review-outcome:
     description: Real outcome of the aptu PR review step (success or failure), independent of continue-on-error
     value: ${{ steps.pr-review.outputs.outcome }}
+
 runs:
   using: composite
   steps:
@@ -314,6 +358,7 @@ runs:
           fi
         fi
         echo "skip=false" >> $GITHUB_OUTPUT
+
     - name: Write fallback AI config
       if: inputs.fallback-provider != '' || inputs.fallback-model != ''
       shell: bash
@@ -325,6 +370,7 @@ runs:
         printf '[ai.fallback]\nchain = [{ provider = "%s", model = "%s" }]\n' \
           "$INPUT_FALLBACK_PROVIDER" "$INPUT_FALLBACK_MODEL" \
           > "$HOME/.config/aptu/config.toml"
+
     - name: Resolve aptu version
       id: resolve-version
       if: steps.check-skip.outputs.skip != 'true'
@@ -343,15 +389,17 @@ runs:
         echo "Resolved: $APTU_VERSION"
         echo "version=$APTU_VERSION" >> "$GITHUB_OUTPUT"
         echo "::endgroup::"
+
     - name: Cache aptu binary
       id: cache-aptu
       if: steps.check-skip.outputs.skip != 'true'
-      uses: chainguard-actions/actions-cache@244dfed44d8c4e917b332280fb2c1063eda3d9be # v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ~/.local/bin/aptu
         key: aptu-${{ steps.resolve-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
         restore-keys: |
           aptu-${{ steps.resolve-version.outputs.version }}-${{ runner.os }}-
+
     - name: Install aptu binary
       id: install-aptu
       if: steps.check-skip.outputs.skip != 'true' && steps.cache-aptu.outputs.cache-hit != 'true'
@@ -393,12 +441,15 @@ runs:
 
         echo "aptu v$APTU_VERSION installed and verified"
         echo "::endgroup::"
+
     - name: Setup PATH
       if: steps.check-skip.outputs.skip != 'true'
       id: setup-path
       shell: bash
-      run: | # zizmor: ignore[github-env]
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      run: |  # zizmor: ignore[github-env]
+        safe=$(printf '%s' "$HOME/.local/bin" | tr -d '\n\r')
+        echo "$safe" >> "$GITHUB_PATH"
+
     - name: Run aptu issue triage
       if: (github.event_name == 'issues' || (github.event_name == 'repository_dispatch' && inputs.repo != '' && inputs['issue-number'] != '')) && steps.check-skip.outputs.skip != 'true'
       shell: bash
@@ -446,6 +497,7 @@ runs:
 
         echo "Running: aptu issue triage ${ARGS[*]} $ISSUE_REF"
         aptu issue triage "${ARGS[@]}" "$ISSUE_REF"
+
     - name: Run aptu issue triage (scheduled batch)
       if: github.event_name == 'schedule' && steps.check-skip.outputs.skip != 'true'
       shell: bash
@@ -489,6 +541,7 @@ runs:
         fi
         echo "Running: aptu issue triage ${ARGS[*]}"
         aptu issue triage "${ARGS[@]}"
+
     - name: Run aptu PR label
       if: github.event_name == 'pull_request' || (github.event_name == 'repository_dispatch' && inputs.repo != '' && inputs['pull-number'] != '')
       shell: bash
@@ -526,10 +579,11 @@ runs:
 
         echo "Running: aptu pr label ${ARGS[*]} $PR_REF"
         aptu pr label "${ARGS[@]}" "$PR_REF"
+
     - name: Run aptu PR review
       id: pr-review
       if: github.event_name == 'pull_request' || (github.event_name == 'repository_dispatch' && inputs.repo != '' && inputs['pull-number'] != '')
-      continue-on-error: true # Non-blocking - AI review is advisory
+      continue-on-error: true  # Non-blocking - AI review is advisory
       shell: bash
       env:
         PR_NUMBER: ${{ github.event_name == 'repository_dispatch' && inputs['pull-number'] || github.event.pull_request.number }}
@@ -603,6 +657,7 @@ runs:
         else
           echo "outcome=failure" >> "$GITHUB_OUTPUT"
         fi
+
     - name: Run aptu scan-security
       if: inputs.scan-path != '' || inputs.scan-security-diff != ''
       continue-on-error: ${{ inputs.fail-on == '' }}
@@ -641,6 +696,7 @@ runs:
           echo "Running: aptu scan-security $SCAN_PATH --output github-annotations --sarif-output findings.sarif ${FAIL_ON_ARGS[*]} ${EXCLUDE_ARGS[*]}"
           aptu scan-security "$SCAN_PATH" --output github-annotations --sarif-output findings.sarif "${FAIL_ON_ARGS[@]}" "${EXCLUDE_ARGS[@]}"
         fi
+
     - name: Upload SARIF report
       if: always() && inputs.sarif-upload == 'true' && hashFiles('findings.sarif') != ''
       continue-on-error: true
@@ -649,6 +705,7 @@ runs:
         sarif_file: findings.sarif
         category: aptu-scan-security
         token: ${{ inputs.github-token || github.token }}
+
     - name: Run aptu pr queue
       if: inputs.pr-queue == 'true'
       continue-on-error: true
@@ -671,11 +728,47 @@ runs:
         set -e
         echo "Running: aptu pr queue --repo $REPO"
         aptu pr queue --repo "$REPO"
+
     - name: Aggregate metrics outputs
       id: metrics-aggregate
       if: always()
       shell: bash
-      run: "if ! command -v jq >/dev/null 2>&1; then\n  echo \"::warning::aptu: jq not found; token usage metrics will be unavailable\" >&2\nfi\nif [ -f \"$RUNNER_TEMP/aptu-token-usage.jsonl\" ]; then\n  input_tokens=$(jq -s '[.[].input_tokens] | add // 0' \"$RUNNER_TEMP/aptu-token-usage.jsonl\")\n  output_tokens=$(jq -s '[.[].output_tokens] | add // 0' \"$RUNNER_TEMP/aptu-token-usage.jsonl\")\n  duration_ms=$(jq -s '[.[].duration_ms] | add // 0' \"$RUNNER_TEMP/aptu-token-usage.jsonl\")\n  cost_usd=$(jq -s '[.[].cost_usd | select(. != null)] | if length > 0 then add else empty end' \"$RUNNER_TEMP/aptu-token-usage.jsonl\" 2>/dev/null || echo \"\")\n  echo \"input_tokens=$input_tokens\" >> \"$GITHUB_OUTPUT\"\n  echo \"output_tokens=$output_tokens\" >> \"$GITHUB_OUTPUT\"\n  echo \"duration_ms=$duration_ms\" >> \"$GITHUB_OUTPUT\"\n  echo \"cost_usd=$cost_usd\" >> \"$GITHUB_OUTPUT\"\n  \n  # Effective Token Units (sum across all records)\n  ETU=$(jq -s '[.[].effective_token_units // 0] | add // 0 | ceil' \"$RUNNER_TEMP/aptu-token-usage.jsonl\" 2>/tmp/jq-etu-err || { echo \"::warning::aptu: jq parse failed for effective_token_units: $(cat /tmp/jq-etu-err 2>/dev/null)\" >&2; echo \"0\"; })\n  echo \"effective_token_units=$ETU\" >> \"$GITHUB_OUTPUT\"\n  \n  # Cache hit ratio (cache_read / (input + cache_read)), as integer percent, or n/a\n  TOTAL_INPUT=$(jq -s '[.[].input_tokens // 0] | add // 0' \"$RUNNER_TEMP/aptu-token-usage.jsonl\" 2>/dev/null || echo \"0\")\n  TOTAL_CACHE_READ=$(jq -s '[.[].cache_read_tokens // 0] | add // 0' \"$RUNNER_TEMP/aptu-token-usage.jsonl\" 2>/dev/null || echo \"0\")\n  if [ \"$TOTAL_INPUT\" -gt 0 ] || [ \"$TOTAL_CACHE_READ\" -gt 0 ]; then\n    CACHE_PCT=$(jq -n \"($TOTAL_CACHE_READ / ($TOTAL_INPUT + $TOTAL_CACHE_READ) * 100) | round\" 2>/tmp/jq-cache-err || { echo \"::warning::aptu: jq parse failed for cache_hit_ratio: $(cat /tmp/jq-cache-err 2>/dev/null)\" >&2; echo \"0\"; })\n    echo \"cache_hit_ratio=${CACHE_PCT}%\" >> \"$GITHUB_OUTPUT\"\n  else\n    echo \"cache_hit_ratio=n/a\" >> \"$GITHUB_OUTPUT\"\n  fi\nelse\n  echo \"input_tokens=0\" >> \"$GITHUB_OUTPUT\"\n  echo \"output_tokens=0\" >> \"$GITHUB_OUTPUT\"\n  echo \"duration_ms=0\" >> \"$GITHUB_OUTPUT\"\n  echo \"cost_usd=\" >> \"$GITHUB_OUTPUT\"\n  echo \"effective_token_units=0\" >> \"$GITHUB_OUTPUT\"\n  echo \"cache_hit_ratio=n/a\" >> \"$GITHUB_OUTPUT\"\nfi\n"
+      run: |
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "::warning::aptu: jq not found; token usage metrics will be unavailable" >&2
+        fi
+        if [ -f "$RUNNER_TEMP/aptu-token-usage.jsonl" ]; then
+          input_tokens=$(jq -s '[.[].input_tokens] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl")
+          output_tokens=$(jq -s '[.[].output_tokens] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl")
+          duration_ms=$(jq -s '[.[].duration_ms] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl")
+          cost_usd=$(jq -s '[.[].cost_usd | select(. != null)] | if length > 0 then add else empty end' "$RUNNER_TEMP/aptu-token-usage.jsonl" 2>/dev/null || echo "")
+          echo "input_tokens=$input_tokens" >> "$GITHUB_OUTPUT"
+          echo "output_tokens=$output_tokens" >> "$GITHUB_OUTPUT"
+          echo "duration_ms=$duration_ms" >> "$GITHUB_OUTPUT"
+          echo "cost_usd=$cost_usd" >> "$GITHUB_OUTPUT"
+          
+          # Effective Token Units (sum across all records)
+          ETU=$(jq -s '[.[].effective_token_units // 0] | add // 0 | ceil' "$RUNNER_TEMP/aptu-token-usage.jsonl" 2>/tmp/jq-etu-err || { echo "::warning::aptu: jq parse failed for effective_token_units: $(cat /tmp/jq-etu-err 2>/dev/null)" >&2; echo "0"; })
+          echo "effective_token_units=$ETU" >> "$GITHUB_OUTPUT"
+          
+          # Cache hit ratio (cache_read / (input + cache_read)), as integer percent, or n/a
+          TOTAL_INPUT=$(jq -s '[.[].input_tokens // 0] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl" 2>/dev/null || echo "0")
+          TOTAL_CACHE_READ=$(jq -s '[.[].cache_read_tokens // 0] | add // 0' "$RUNNER_TEMP/aptu-token-usage.jsonl" 2>/dev/null || echo "0")
+          if [ "$TOTAL_INPUT" -gt 0 ] || [ "$TOTAL_CACHE_READ" -gt 0 ]; then
+            CACHE_PCT=$(jq -n "($TOTAL_CACHE_READ / ($TOTAL_INPUT + $TOTAL_CACHE_READ) * 100) | round" 2>/tmp/jq-cache-err || { echo "::warning::aptu: jq parse failed for cache_hit_ratio: $(cat /tmp/jq-cache-err 2>/dev/null)" >&2; echo "0"; })
+            echo "cache_hit_ratio=${CACHE_PCT}%" >> "$GITHUB_OUTPUT"
+          else
+            echo "cache_hit_ratio=n/a" >> "$GITHUB_OUTPUT"
+          fi
+        else
+          echo "input_tokens=0" >> "$GITHUB_OUTPUT"
+          echo "output_tokens=0" >> "$GITHUB_OUTPUT"
+          echo "duration_ms=0" >> "$GITHUB_OUTPUT"
+          echo "cost_usd=" >> "$GITHUB_OUTPUT"
+          echo "effective_token_units=0" >> "$GITHUB_OUTPUT"
+          echo "cache_hit_ratio=n/a" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Write token usage summary
       if: always()
       shell: bash
@@ -687,7 +780,7 @@ runs:
           jq -r '. | "| \(.model) | \(.input_tokens) | \(.output_tokens) | \(.cache_read_tokens // 0) | \(.cache_write_tokens // 0) | \(.duration_ms)ms | \(.effective_token_units // 0 | ceil | tostring) | \(if ((.input_tokens // 0) + (.cache_read_tokens // 0)) > 0 then ((.cache_read_tokens // 0) / ((.input_tokens // 0) + (.cache_read_tokens // 0)) * 100 | round | tostring) + "%" else "n/a" end) | \(if .cost_usd then ("$" + (.cost_usd | tostring)) else "n/a" end) |"' \
             "$RUNNER_TEMP/aptu-token-usage.jsonl" >> "$GITHUB_STEP_SUMMARY"
         fi
-
+        
         # Context budget summary
         if [ -n "${APTU_CONTEXT_FILE:-}" ] && [ -f "$APTU_CONTEXT_FILE" ]; then
           FILES_TOTAL=$(jq -s '[.[].files_total // 0] | add // 0' "$APTU_CONTEXT_FILE")
@@ -707,27 +800,29 @@ runs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
         fi
+
     - name: Upload token usage artifact
       if: always()
-      uses: chainguard-actions/actions-upload-artifact@dc8d35a3347d79eda9033e7af73f508094dd41b5 # v7.0.1
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: aptu-token-usage-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-token-usage.jsonl
         retention-days: 7
         if-no-files-found: ignore
+
     - name: Upload review context artifact
       if: always()
-      uses: chainguard-actions/actions-upload-artifact@dc8d35a3347d79eda9033e7af73f508094dd41b5 # v7.0.1
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: aptu-review-context-${{ github.run_id }}
         path: ${{ runner.temp }}/aptu-review-context.jsonl
         retention-days: 7
         if-no-files-found: ignore
+
     - name: Roll up anonymized review-context telemetry
       if: always() && inputs.telemetry-rollup == 'true'
       shell: bash
       env:
         APTU_CONTEXT_FILE: ${{ runner.temp }}/aptu-review-context.jsonl
         TELEMETRY_ROLLUP_PATH: ${{ inputs.telemetry-rollup-path }}
-        ACTION_PATH: ${{ github.action_path }}
-      run: "$ACTION_PATH/scripts/telemetry-rollup.sh \"$APTU_CONTEXT_FILE\" \"$TELEMETRY_ROLLUP_PATH\" || true"
+      run: "\"$GITHUB_ACTION_PATH/scripts/telemetry-rollup.sh\" \"$APTU_CONTEXT_FILE\" \"$TELEMETRY_ROLLUP_PATH\" || true"

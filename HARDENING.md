@@ -10,25 +10,37 @@
 
 **Harden Agent Version:** `2`
 
-Action **clouatre-labs--aptu/v0.10.20** was hardened automatically. 1 finding(s) were identified and resolved across 1 iteration(s).
+Action **clouatre-labs--aptu/v0.10.20** was hardened automatically. 2 finding(s) were identified and resolved across 1 iteration(s).
 
 ## Findings Fixed
 
 ### script-injection (severity: high)
 
-Sub-rule (a) violation: The 'Roll up anonymized review-context telemetry' step interpolates `${{ github.action_path }}` directly inside the `run:` shell command string. Any `${{ ... }}` expression inside a `run:` block is a script-injection risk because YAML template substitution occurs before the shell ever sees the value. The offending line is: `run: "${{ github.action_path }}/scripts/telemetry-rollup.sh \"$APTU_CONTEXT_FILE\" \"$TELEMETRY_ROLLUP_PATH\" || true"`. The fix is to move `github.action_path` into an `env:` variable (e.g. `ACTION_PATH: ${{ github.action_path }}`) and reference it as `"$ACTION_PATH/scripts/telemetry-rollup.sh ..."` in the `run:` block.
+Rule (a): the 'Roll up anonymized review-context telemetry' step puts a GitHub Actions expression straight into its run: string: `run: "${{ github.action_path }}/scripts/telemetry-rollup.sh \"$APTU_CONTEXT_FILE\" \"$TELEMETRY_ROLLUP_PATH\" || true"`. Expressions are substituted into the script text before the shell parses it. Fix: pass the path through env (e.g. ACTION_PATH: ${{ github.action_path }}) and call "$ACTION_PATH/scripts/telemetry-rollup.sh", or use the runner's $GITHUB_ACTION_PATH variable, quoted.
 
 Locations:
 
-- `action.yml:370`
+- `action.yml:814`
+
+### github-env-injection (severity: high)
+
+The 'Setup PATH' step (id: setup-path) runs `echo "$HOME/.local/bin" >> "$GITHUB_PATH"`. HOME is an inherited process env var that this run: script does not set, and a composite action gets its env from the calling workflow, so this check treats it as workflow-controlled. No `printf '%s' ... | tr -d '\n\r'` sanitization is applied before the write (the zizmor ignore comment does not count as sanitization). Fix: safe=$(printf '%s' "$HOME/.local/bin" | tr -d '\n\r'); echo "$safe" >> "$GITHUB_PATH".
+
+Locations:
+
+- `action.yml:433`
 
 ## Iteration Notes
 
 ### Iteration 1
 
-**Fixes applied:** script-injection
+**Fixes applied:** script-injection, github-env-injection
 
 **Notes:**
 
-Fixed the script-injection vulnerability in the 'Roll up anonymized review-context telemetry' step of hardened/action/action.yml. Moved `${{ github.action_path }}` from the `run:` shell command string into the step's `env:` block as `ACTION_PATH: ${{ github.action_path }}`, and updated the `run:` command to reference it as the plain environment variable `$ACTION_PATH`.
+I fixed both findings in action.yml.
+
+1. script-injection (telemetry rollup step): the `${{ github.action_path }}` expression no longer sits in the run: string. It is now passed through env as ACTION_PATH, and the step calls `"$ACTION_PATH/scripts/telemetry-rollup.sh"` in quotes. The other arguments and the `|| true` are as upstream had them.
+
+2. github-env-injection (Setup PATH step): `$HOME/.local/bin` now goes through `printf '%s' ... | tr -d '\n\r'` before it is written to $GITHUB_PATH.
 
